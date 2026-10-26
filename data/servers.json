@@ -1,0 +1,59 @@
+{
+  "servers": [
+    {
+      "name": "徐忠杰",
+      "number": "1015",
+      "machine": "243"
+    },
+    {
+      "name": "策划3",
+      "number": "1018",
+      "machine": "241"
+    },
+    {
+      "name": "结算1",
+      "number": "2201",
+      "machine": "241"
+    },
+    {
+      "name": "结算2",
+      "number": "2202",
+      "machine": "241"
+    },
+    {
+      "name": "结算3",
+      "number": "2203",
+      "machine": "241"
+    },
+    {
+      "name": "结算4",
+      "number": "2204",
+      "machine": "241"
+    },
+    {
+      "name": "结算5",
+      "number": "2205",
+      "machine": "241"
+    },
+    {
+      "name": "结算6",
+      "number": "2206",
+      "machine": "241"
+    },
+    {
+      "name": "角色服",
+      "number": "10000",
+      "machine": "241"
+    },
+    {
+      "name": "匹配服",
+      "number": "198",
+      "machine": "241"
+    },
+    {
+      "name": "中转服",
+      "number": "102",
+      "machine": "241"
+    }
+  ]
+}
