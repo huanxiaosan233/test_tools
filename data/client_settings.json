@@ -1,4 +1,5 @@
 {
   "main_client_path": "E:/y11_designer/game/game.exe",
-  "branch_root_dir": "E:/分支版本"
+  "branch_root_dir": "E:/分支版本",
+  "config_dir": "E:/y11_designer/C-策划导表/autocode"
 }

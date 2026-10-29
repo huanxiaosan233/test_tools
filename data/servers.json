@@ -54,6 +54,16 @@
       "name": "中转服",
       "number": "102",
       "machine": "241"
+    },
+    {
+      "name": "策划2",
+      "number": "1002",
+      "machine": "241"
+    },
+    {
+      "name": "美术服",
+      "number": "1005",
+      "machine": "243"
     }
   ]
 }

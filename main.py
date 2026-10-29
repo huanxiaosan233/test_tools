@@ -8,7 +8,9 @@
 切换赛季 / 切换群组 / 切换分支指令，后续新增指令只需在 COMMANDS 中增加一项。
 """
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -22,11 +24,13 @@ from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QTextCharFormat, QTex
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -65,6 +69,8 @@ COMMANDS = [
     {"key": "switchbranch", "label": "切换分支", "op": "switch.sh", "check_proc": True,
      "dialog": "switch_branch", "timeout": None, "cancelable": True},
     {"key": "status", "label": "服务器改动", "op": "status.sh", "check_proc": False, "more": True},
+    {"key": "swstage", "label": "服务器档位", "op": "swSrvStage.sh", "check_proc": False,
+     "param": "stage", "param_name": "档位", "more": True},
     # 本地客户端指令（不走 HTTP）
     {"key": "clientcompile", "label": "客户端编译", "mode": "local", "no_config": True},
     {"key": "openclient", "label": "打开主干", "mode": "local"},
@@ -74,6 +80,24 @@ COMMANDS = [
     {"key": "openbranch_last", "label": "打开上周分支", "mode": "local"},
     {"key": "svnupdatebranch_last", "label": "更新上周分支", "mode": "local", "svn": True},
 ]
+
+# 「切换群组」右键「查看群组」弹窗中展示的群组对照表
+GROUP_LIST_TEXT = (
+    "99\t内服\n"
+    "4\t大陆正式服\n"
+    "5\t大陆彩蛋服\n"
+    "6\t大陆周版本\n"
+    "7\t台湾正式服\n"
+    "8\t台湾彩蛋服\n"
+    "9\t韩国彩蛋服\n"
+    "10\t韩国正式服\n"
+    "11\t东南亚正式服\n"
+    "12\t东南亚彩蛋服\n"
+    "13\t日本正式服\n"
+    "14\t日本彩蛋服\n"
+    "15\t海外混服正式服\n"
+    "16\t海外混服彩蛋/周版本服"
+)
 
 
 def branch_options(count=5, today=None):
@@ -105,9 +129,48 @@ def latest_wednesday_mmdd(today=None, weeks_ago=0):
     """
     return latest_wednesday(today, weeks_ago).strftime("%m%d")
 
+
+def autocode_relative_path(local_path):
+    """从本地文件路径中截取 autocode 之后的相对路径。
+
+    例如 E:\\y11_designer\\C-策划导表\\autocode\\ActReward\\Act1001.lua
+    返回 \\ActReward\\Act1001.lua（保留原分隔符）。
+    路径中不含 autocode 目录时返回 None。
+    """
+    norm = str(local_path).replace("/", "\\")
+    idx = norm.lower().find("\\autocode\\")
+    if idx < 0:
+        return None
+    return norm[idx + len("\\autocode"):]
+
+
+def build_upload_file_path(local_path, srv):
+    """按服务器信息拼出上传接口需要的服务端 file_path。
+
+    返回 (file_path, None) 或 (None, 错误说明)。
+    """
+    if srv.get("machine") not in UPLOAD_PATH_PREFIX:
+        return None, "服务器「%s」的机器号 %s 暂不支持配置替换" % (srv.get("name"), srv.get("machine"))
+    sub = autocode_relative_path(local_path)
+    if sub is None:
+        return None, "文件路径必须位于 autocode 目录下，当前为：%s" % local_path
+    prefix = UPLOAD_PATH_PREFIX[srv["machine"]]
+    tail = UPLOAD_PATH_TAIL % (srv["number"], sub)
+    return prefix + tail, None
+
+
 # 「更新」成功后自动执行的进程状态检查指令，以及判定进程异常的响应关键字
 PROC_OP = "proc.sh"
 PROC_ABNORMAL_KEYWORD = "进程挂了"
+
+# 配置替换：autocode 文件上传接口（端口与机器对应）
+UPLOAD_BASE = {
+    "241": "http://192.168.6.241:3999/upload_file",
+    "243": "http://192.168.6.243:3999/upload_file",
+}
+UPLOAD_KEY = "tk$rBp9)5s&kj7"          # 上传接口固定 key
+UPLOAD_PATH_PREFIX = {"241": "/home", "243": "/data"}  # 服务端路径前缀
+UPLOAD_PATH_TAIL = "/qc_test/y11_qc_srv/game_%s/logic/autocode%s"  # %s=服务器编号, %s=autocode 后的相对路径
 
 # 切换分支日志接口和监控主进程报错日志接口
 LOG_OP = "log.sh"
@@ -193,6 +256,7 @@ def data_dir() -> Path:
 DATA_DIR = data_dir()
 DATA_FILE = DATA_DIR / "servers.json"
 CLIENT_SETTINGS_FILE = DATA_DIR / "client_settings.json"
+CUSTOM_COMMANDS_FILE = DATA_DIR / "custom_commands.json"
 
 
 def _migrate_old_file(new_path: Path) -> None:
@@ -233,6 +297,40 @@ def save_servers(servers):
     )
 
 
+def load_custom_cmd_defs():
+    """加载自定义指令定义（「更多」中右键新增的指令）。
+
+    每项格式：{"op": 指令, "need_param": 是否需要数字框, "check_proc": 是否执行后检查进程}
+    """
+    _migrate_old_file(CUSTOM_COMMANDS_FILE)
+    if not CUSTOM_COMMANDS_FILE.exists():
+        return []
+    try:
+        data = json.loads(CUSTOM_COMMANDS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    result = []
+    for item in data.get("commands") or []:
+        op = str(item.get("op", "")).strip()
+        if not op:
+            continue
+        name = str(item.get("name", "")).strip() or op
+        result.append({
+            "name": name,
+            "op": op,
+            "need_param": bool(item.get("need_param")),
+            "check_proc": bool(item.get("check_proc")),
+        })
+    return result
+
+
+def save_custom_cmd_defs(defs):
+    CUSTOM_COMMANDS_FILE.write_text(
+        json.dumps({"commands": defs}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def load_client_settings():
     """加载客户端配置。
 
@@ -242,19 +340,21 @@ def load_client_settings():
       - branch_root_dir: 分支版本根目录（如 E:/分支版本）
         本周分支路径 = branch_root_dir/MMDD/game/game.exe
         本周分支 SVN 更新目录 = branch_root_dir/MMDD/game
+      - config_dir: 配置目录（配置替换页签「打开配置目录」按钮使用）
     旧配置里的 svn_update_dir 已废弃，忽略即可。
     """
     _migrate_old_file(CLIENT_SETTINGS_FILE)
     if not CLIENT_SETTINGS_FILE.exists():
-        return {"main_client_path": "", "branch_root_dir": ""}
+        return {"main_client_path": "", "branch_root_dir": "", "config_dir": ""}
     try:
         data = json.loads(CLIENT_SETTINGS_FILE.read_text(encoding="utf-8"))
         return {
             "main_client_path": str(data.get("main_client_path", "")),
             "branch_root_dir": str(data.get("branch_root_dir", "")),
+            "config_dir": str(data.get("config_dir", "")),
         }
     except Exception:
-        return {"main_client_path": "", "branch_root_dir": ""}
+        return {"main_client_path": "", "branch_root_dir": "", "config_dir": ""}
 
 
 def save_client_settings(settings):
@@ -370,6 +470,115 @@ class _SVNWorker(QThread):
             self.done.emit(False, -1, "", "", "未找到 svn 命令，请确认已安装并加入 PATH")
         except Exception as exc:
             self.done.emit(False, -1, "", "", str(exc))
+
+
+class UploadWorker(QThread):
+    """后台上传 autocode 文件到服务端（multipart/form-data）。"""
+
+    done = Signal(bool, str, str)  # ok, 服务端 file_path, 结果说明
+
+    def __init__(self, srv, local_path, remote_path, parent=None):
+        super().__init__(parent)
+        self._srv = srv
+        self._local_path = local_path
+        self._remote_path = remote_path
+
+    def run(self):
+        url = UPLOAD_BASE.get(self._srv.get("machine"))
+        if not url:
+            self.done.emit(False, self._remote_path, "机器 %s 没有对应的上传接口" % self._srv.get("machine"))
+            return
+        try:
+            with open(self._local_path, "rb") as fh:
+                resp = requests.post(
+                    url,
+                    data={"file_path": self._remote_path, "key": UPLOAD_KEY},
+                    files={"upload": (Path(self._local_path).name, fh)},
+                    timeout=120,
+                )
+            body = resp.text.strip()
+            if len(body) > 1500:
+                body = body[:1500] + "…"
+            # 替换是否成功以响应内容为准：包含「成功替换」才算成功，否则失败
+            ok = "成功替换" in body
+            if ok or 200 <= resp.status_code < 300:
+                self.done.emit(ok, self._remote_path, body or "（空响应）")
+            else:
+                self.done.emit(False, self._remote_path, "HTTP %s\n%s" % (resp.status_code, body or "（空响应）"))
+        except FileNotFoundError:
+            self.done.emit(False, self._remote_path, "本地文件不存在：%s" % self._local_path)
+        except requests.exceptions.RequestException as exc:
+            self.done.emit(False, self._remote_path, "请求失败：%s" % exc)
+        except Exception as exc:
+            self.done.emit(False, self._remote_path, "上传异常：%s" % exc)
+
+
+class FileDropArea(QFrame):
+    """可拖入文件、也可点击选择文件的区域。"""
+
+    fileChosen = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(110)
+        self._path = ""
+        self._set_idle_style()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        self._label = QLabel("将 autocode 目录下的文件拖到这里\n或点击选择文件")
+        self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._label.setWordWrap(True)
+        self._label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        layout.addWidget(self._label)
+
+    def _set_idle_style(self):
+        self.setStyleSheet(
+            "FileDropArea { border: 2px dashed #b9c4d0; border-radius: 8px; background: #fafbfc; }"
+        )
+
+    def _set_hover_style(self):
+        self.setStyleSheet(
+            "FileDropArea { border: 2px dashed #2f7ae5; border-radius: 8px; background: #eef4ff; }"
+        )
+
+    def path(self):
+        return self._path
+
+    def set_path(self, path):
+        self._path = path or ""
+        self._label.setText(self._path or "将 autocode 目录下的文件拖到这里\n或点击选择文件")
+        self._label.setStyleSheet("color:#1f5bb5;" if self._path else "color:#7a8794;")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._choose_file()
+        super().mousePressEvent(event)
+
+    def _choose_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择要替换的文件", "", "所有文件 (*.*)")
+        if path:
+            self.set_path(path)
+            self.fileChosen.emit(path)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            self._set_hover_style()
+
+    def dragLeaveEvent(self, event):
+        self._set_idle_style()
+
+    def dropEvent(self, event):
+        self._set_idle_style()
+        for url in event.mimeData().urls():
+            local = url.toLocalFile()
+            if local:
+                self.set_path(local)
+                self.fileChosen.emit(local)
+                event.acceptProposedAction()
+                return
 
 
 class ServerDialog(QDialog):
@@ -541,9 +750,13 @@ class ResponseDialog(QDialog):
 
 
 class MoreCommandsDialog(QDialog):
-    """「更多」指令弹窗：按钮排布与外层服务器指令区一致（每行 3 个，可带数字输入框）。"""
+    """「更多」指令弹窗：按钮排布与外层服务器指令区一致（每行 3 个，可带数字输入框）。
 
-    def __init__(self, more_cmds, parent=None):
+    底部「新增」按钮用于新增自定义指令；自定义指令按钮支持右键「编辑 / 删除」。
+    """
+
+    def __init__(self, more_cmds, add_callback=None, edit_callback=None,
+                 delete_callback=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("更多指令")
         self.setModal(True)
@@ -551,12 +764,40 @@ class MoreCommandsDialog(QDialog):
         self.chosen = None
         self.param_value = None
         self.param_widgets = {}  # cmd_key -> QSpinBox
+        self._more_cmds = list(more_cmds)
+        self._add_callback = add_callback
+        self._edit_callback = edit_callback
+        self._delete_callback = delete_callback
 
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
-        grid = QGridLayout()
-        grid.setSpacing(6)
-        for idx, cmd in enumerate(more_cmds):
+        self._grid = QGridLayout()
+        self._grid.setSpacing(6)
+        layout.addLayout(self._grid)
+        layout.addStretch(1)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        add_btn = QPushButton("新增")
+        add_btn.clicked.connect(self._on_add)
+        row.addWidget(add_btn)
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(self.reject)
+        row.addWidget(close_btn)
+        layout.addLayout(row)
+
+        self._rebuild()
+
+    def _rebuild(self):
+        """根据 self._more_cmds 重建按钮网格。"""
+        self.param_widgets = {}
+        while self._grid.count():
+            item = self._grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        for idx, cmd in enumerate(self._more_cmds):
             btn = QPushButton(cmd["label"])
             btn.setMinimumHeight(40)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -578,19 +819,42 @@ class MoreCommandsDialog(QDialog):
                 cell_layout.addWidget(spin)
                 self.param_widgets[cmd["key"]] = spin
 
-            row, col = divmod(idx, 3)
-            grid.addWidget(cell, row, col)
-        for c in range(3):
-            grid.setColumnStretch(c, 1)
-        layout.addLayout(grid)
-        layout.addStretch(1)
+            # 自定义指令：右键编辑 / 删除
+            if cmd.get("custom"):
+                btn.setToolTip("右键：编辑 / 删除")
+                btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                btn.customContextMenuRequested.connect(
+                    lambda pos, c=cmd, b=btn: self._on_cmd_context_menu(pos, c, b)
+                )
 
-        row = QHBoxLayout()
-        row.addStretch(1)
-        close_btn = QPushButton("关闭")
-        close_btn.clicked.connect(self.reject)
-        row.addWidget(close_btn)
-        layout.addLayout(row)
+            r, c = divmod(idx, 3)
+            self._grid.addWidget(cell, r, c)
+        for c in range(3):
+            self._grid.setColumnStretch(c, 1)
+
+    def _on_add(self):
+        if not self._add_callback:
+            return
+        new_list = self._add_callback()
+        if new_list is not None:
+            self._more_cmds = list(new_list)
+            self._rebuild()
+
+    def _on_cmd_context_menu(self, pos, cmd, btn):
+        menu = QMenu(self)
+        edit_act = menu.addAction("编辑")
+        del_act = menu.addAction("删除")
+        chosen = menu.exec(btn.mapToGlobal(pos))
+        if chosen == edit_act and self._edit_callback:
+            new_list = self._edit_callback(cmd["key"])
+            if new_list is not None:
+                self._more_cmds = list(new_list)
+                self._rebuild()
+        elif chosen == del_act and self._delete_callback:
+            new_list = self._delete_callback(cmd["key"])
+            if new_list is not None:
+                self._more_cmds = list(new_list)
+                self._rebuild()
 
     def _choose(self, cmd):
         """记录选中的指令及其参数值，然后关闭弹窗。"""
@@ -598,6 +862,61 @@ class MoreCommandsDialog(QDialog):
         spin = self.param_widgets.get(cmd["key"])
         self.param_value = str(spin.value()) if spin is not None else None
         self.accept()
+
+
+class AddCommandDialog(QDialog):
+    """「新增/编辑指令」弹窗：输入名字与指令，并勾选是否需要数字框、是否执行后检查进程。"""
+
+    def __init__(self, initial=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("编辑指令" if initial else "新增指令")
+        self.setMinimumWidth(440)
+
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("例如 服务器档位")
+        self.op_edit = QLineEdit()
+        self.op_edit.setPlaceholderText("例如 swSrvStage.sh")
+        self.param_check = QCheckBox("需要数字框（数字跟在服务器编号后面）")
+        self.proc_check = QCheckBox("执行后自动检查进程")
+
+        if initial:
+            self.name_edit.setText(initial.get("name", ""))
+            self.op_edit.setText(initial.get("op", ""))
+            self.param_check.setChecked(bool(initial.get("need_param")))
+            self.proc_check.setChecked(bool(initial.get("check_proc")))
+
+        form = QFormLayout(self)
+        form.addRow("名字：", self.name_edit)
+        form.addRow("指令：", self.op_edit)
+        form.addRow("", self.param_check)
+        form.addRow("", self.proc_check)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Save).setText("保存")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        form.addRow(buttons)
+
+        def accept():
+            if not self.name_edit.text().strip():
+                QMessageBox.information(self, "提示", "请输入名字")
+                return
+            if not self.op_edit.text().strip():
+                QMessageBox.information(self, "提示", "请输入指令")
+                return
+            self.accept()
+
+        buttons.accepted.connect(accept)
+        buttons.rejected.connect(self.reject)
+
+    def values(self):
+        return (
+            self.name_edit.text().strip(),
+            self.op_edit.text().strip(),
+            self.param_check.isChecked(),
+            self.proc_check.isChecked(),
+        )
 
 
 class MainWindow(QWidget):
@@ -613,9 +932,9 @@ class MainWindow(QWidget):
         self.resize(1096, 720)
 
         self.servers = load_servers()
-        self._selected = None          # 单选模式下的当前服务器下标
-        self._multi = False            # 是否启用多选
-        self._multi_selected = set()   # 多选模式下选中的服务器下标
+        self._custom_cmd_defs = load_custom_cmd_defs()  # 「更多」中新增的自定义指令
+        # 服务器选中状态按页签独立保存在 self._server_lists 各 entry 中
+        # （selected / multi / multi_selected），页签之间互不同步
         self._flows = []       # 进行中的指令流程（支持多台服务器并发操作）
         self._zombies = []     # 已取消但后台线程尚未结束的请求，结束后自动回收
         self._running_svn = set()   # 正在执行中的 SVN 更新指令 key（防止重复触发）
@@ -646,11 +965,407 @@ class MainWindow(QWidget):
         self.tabs = QTabWidget()
         outer.addWidget(self.tabs)
 
+        # 多个页签共用的服务器列表（数据共用，UI 各自渲染，选中状态各自独立）
+        self._server_lists = []   # [{"grid", "group", "multi_btn", "selected", "multi", "multi_selected"}]
+
         # ---- Tab 1：服务器指令 ----
         self.tabs.addTab(self._build_server_tab(), "服务器指令")
 
-        # ---- Tab 2：GM 指令（占位，后续扩展） ----
+        # ---- Tab 2：配置替换 ----
+        self.tabs.addTab(self._build_replace_tab(), "配置替换")
+
+        # ---- Tab 3：GM 指令（占位，后续扩展） ----
         self.tabs.addTab(self._build_gm_tab(), "GM 指令")
+
+    def _build_server_section(self):
+        """服务器模块：标题 + 添加/多选 + 服务器列表。
+
+        多个页签共用同一份服务器数据，但选中状态（selected / multi / multi_selected）
+        保存在各自 entry 中，页签之间互不同步。
+        """
+        box = QWidget()
+        vbox = QVBoxLayout(box)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(8)
+
+        vbox.addWidget(self._title("服务器"))
+        tools = QHBoxLayout()
+        add_btn = QPushButton("添加服务器")
+        multi_btn = QPushButton("多选")
+        multi_btn.setCheckable(True)
+        multi_btn.setStyleSheet(MULTI_BTN_QSS)
+        multi_btn.setToolTip("启用后可同时选中多台服务器，指令会发送给所有选中的服务器")
+        tools.addWidget(add_btn)
+        tools.addWidget(multi_btn)
+        vbox.addLayout(tools)
+
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        host = QWidget()
+        grid = QGridLayout(host)
+        grid.setContentsMargins(2, 2, 2, 2)
+        grid.setSpacing(6)
+        area.setWidget(host)
+        vbox.addWidget(area, 1)
+
+        group = QButtonGroup(self)
+        group.setExclusive(True)
+        entry = {
+            "grid": grid,
+            "group": group,
+            "multi_btn": multi_btn,
+            "selected": None,      # 单选模式下的当前服务器下标
+            "multi": False,        # 是否启用多选
+            "multi_selected": set(),  # 多选模式下选中的服务器下标
+        }
+        self._server_lists.append(entry)
+
+        add_btn.clicked.connect(lambda _=False, e=entry: self._on_add(e))
+        multi_btn.toggled.connect(lambda checked, e=entry: self._on_toggle_multi(e, checked))
+
+        # 第一个列表保持原有属性名，兼容旧代码
+        if not hasattr(self, "server_grid"):
+            self.server_grid = grid
+            self.button_group = group
+            self.server_area = area
+            self.multi_btn = multi_btn
+            self.add_btn = add_btn
+        return box
+
+    def _build_replace_tab(self):
+        """配置替换页签：共用服务器列表 + 上传 autocode 文件替换服务端配置。"""
+        page = QWidget()
+        root = QHBoxLayout(page)
+        root.setContentsMargins(4, 4, 4, 4)
+        root.setSpacing(12)
+
+        # 左列：服务器 + 替换配置
+        left = QVBoxLayout()
+        left.setSpacing(8)
+
+        left.addWidget(self._build_server_section())
+        self._replace_entry = self._server_lists[-1]
+
+        left.addWidget(self._title("替换 autocode 配置"))
+        self.drop_area = FileDropArea()
+        left.addWidget(self.drop_area)
+
+        # 按钮：一行三个，固定大小
+        def _make_replace_btn(text):
+            b = QPushButton(text)
+            b.setFixedSize(150, 40)
+            return b
+
+        self.replace_srv_btn = _make_replace_btn("替换服务端")
+        self.replace_srv_btn.clicked.connect(self._on_replace_server)
+        self.replace_cli_btn = _make_replace_btn("替换客户端")
+        self.replace_cli_btn.clicked.connect(self._on_replace_client)
+        self.replace_branch_btn = _make_replace_btn("替换本周分支")
+        self.replace_branch_btn.clicked.connect(lambda: self._on_replace_branch_client(0))
+        self.replace_branch_last_btn = _make_replace_btn("替换上周分支")
+        self.replace_branch_last_btn.clicked.connect(lambda: self._on_replace_branch_client(1))
+        self.open_config_btn = _make_replace_btn("打开配置目录")
+        self.open_config_btn.setToolTip("点击打开配置目录，右键可设置配置目录")
+        self.open_config_btn.clicked.connect(self._on_open_config_dir)
+        self.open_config_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.open_config_btn.customContextMenuRequested.connect(self._on_config_dir_menu)
+
+        btn_row1 = QHBoxLayout()
+        btn_row1.setSpacing(8)
+        for b in (self.replace_srv_btn, self.replace_cli_btn, self.replace_branch_btn):
+            btn_row1.addWidget(b)
+        btn_row1.addStretch(1)
+        left.addLayout(btn_row1)
+
+        btn_row2 = QHBoxLayout()
+        btn_row2.setSpacing(8)
+        for b in (self.replace_branch_last_btn, self.open_config_btn):
+            btn_row2.addWidget(b)
+        btn_row2.addStretch(1)
+        left.addLayout(btn_row2)
+
+        # 自定义路径替换：输入框默认自动拼接服务端路径（不含本地文件相对路径部分）
+        self.custom_path_edit = QLineEdit()
+        self.custom_path_edit.setPlaceholderText("自定义服务端文件路径（默认自动拼接，可修改）")
+        self.custom_path_edit.setFixedHeight(int(self.custom_path_edit.sizeHint().height() * 1.3))
+        left.addWidget(self.custom_path_edit)
+        self.replace_custom_btn = QPushButton("自定义路径替换")
+        self.replace_custom_btn.setFixedSize(150, 40)
+        self.replace_custom_btn.clicked.connect(self._on_replace_custom)
+        custom_row = QHBoxLayout()
+        custom_row.addWidget(self.replace_custom_btn)
+        custom_row.addStretch(1)
+        left.addLayout(custom_row)
+        self._refresh_custom_path_default()
+
+        left.addStretch(1)
+
+        left_widget = QWidget()
+        left_widget.setLayout(left)
+        left_widget.setMinimumWidth(480)
+        left_widget.setMaximumWidth(480)
+        root.addWidget(left_widget)
+
+        # 右列：执行日志（独立 QTextBrowser，与服务器指令页签互不影响）
+        right = QVBoxLayout()
+        right.setSpacing(8)
+        right.addWidget(self._title("执行日志"))
+        self.replace_log = QTextBrowser()
+        self.replace_log.setOpenLinks(False)
+        self.replace_log.setOpenExternalLinks(False)
+        self.replace_log.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.replace_log.customContextMenuRequested.connect(self._on_log_context_menu)
+        right.addWidget(self.replace_log, 1)
+        root.addLayout(right, 1)
+        return page
+
+    def _on_replace_server(self):
+        path = self.drop_area.path()
+        if not path:
+            QMessageBox.information(self, "提示", "请先拖入或选择要替换的文件")
+            return
+        targets = [self.servers[i] for i in self._target_indexes(self._replace_entry)]
+        if not targets:
+            QMessageBox.information(self, "提示", "请先在上方选中一台（或多台）服务器")
+            return
+
+        jobs = []
+        errors = []
+        for srv in targets:
+            remote, err = build_upload_file_path(path, srv)
+            if err:
+                errors.append(err)
+            else:
+                jobs.append((srv, remote))
+        if errors:
+            QMessageBox.warning(self, "无法替换", "\n".join(errors))
+            if not jobs:
+                return
+        if not jobs:
+            return
+
+        self._start_replace_uploads(path, jobs)
+
+    def _on_replace_custom(self):
+        """自定义路径替换：与「替换服务端」相同，但 file_path 取输入框内容。"""
+        path = self.drop_area.path()
+        if not path:
+            QMessageBox.information(self, "提示", "请先拖入或选择要替换的文件")
+            return
+        remote = self.custom_path_edit.text().strip()
+        if not remote:
+            QMessageBox.information(self, "提示", "请先填写自定义的服务端文件路径")
+            return
+        targets = [self.servers[i] for i in self._target_indexes(self._replace_entry)]
+        if not targets:
+            QMessageBox.information(self, "提示", "请先在上方选中一台（或多台）服务器")
+            return
+
+        jobs = []
+        errors = []
+        for srv in targets:
+            if srv.get("machine") not in UPLOAD_BASE:
+                errors.append("服务器「%s」的机器号 %s 暂不支持配置替换"
+                              % (srv.get("name"), srv.get("machine")))
+            else:
+                jobs.append((srv, remote))
+        if errors:
+            QMessageBox.warning(self, "无法替换", "\n".join(errors))
+            if not jobs:
+                return
+        if not jobs:
+            return
+
+        self._start_replace_uploads(path, jobs)
+
+    def _start_replace_uploads(self, path, jobs):
+        """启动上传任务：jobs = [(srv, remote_file_path), ...]"""
+        self._replace_workers = []
+        self.replace_srv_btn.setEnabled(False)
+        self.replace_custom_btn.setEnabled(False)
+        self._append_to_log('[%s] 正在上传到 %d 台服务器…' % (now_str(), len(jobs)), self.replace_log)
+        self._replace_pending = len(jobs)
+
+        for srv, remote in jobs:
+            worker = UploadWorker(srv, path, remote)
+            worker.done.connect(lambda ok, rp, msg, s=srv: self._on_replace_done(s, ok, rp, msg))
+            self._replace_workers.append(worker)
+            worker.start()
+
+    def _on_replace_done(self, srv, ok, remote_path, message):
+        name = srv["name"]
+        # 先打印响应内容，再根据响应内容给出判断结果
+        self._append_to_log('[%s] %s <span style="color:#666">响应内容：</span>%s'
+                            % (now_str(), esc(name), esc_multiline(message)), self.replace_log)
+        if ok:
+            self._append_to_log('[%s] <span style="color:#1e7e34">替换成功：%s</span>'
+                                % (now_str(), esc(name)), self.replace_log)
+        else:
+            self._append_to_log('[%s] <span style="color:#c62828">替换失败：%s</span>'
+                                % (now_str(), esc(name)), self.replace_log)
+        self._replace_pending -= 1
+        if self._replace_pending <= 0:
+            self.replace_srv_btn.setEnabled(True)
+            self._update_custom_widgets_enabled()
+
+    # ---------- 自定义路径默认值 ----------
+    def _auto_custom_path(self):
+        """自动拼接的服务端路径（不含从本地文件截取的 autocode 相对路径部分）。"""
+        indexes = self._target_indexes(self._replace_entry)
+        if not indexes:
+            return ""
+        srv = self.servers[indexes[0]]
+        prefix = UPLOAD_PATH_PREFIX.get(srv.get("machine"))
+        if prefix is None:
+            return ""
+        return prefix + (UPLOAD_PATH_TAIL % (srv["number"], ""))
+
+    def _refresh_custom_path_default(self):
+        """选中服务器变化时，实时刷新为最新默认路径。"""
+        if not hasattr(self, "custom_path_edit"):
+            return
+        self.custom_path_edit.setText(self._auto_custom_path())
+
+    def _update_custom_widgets_enabled(self):
+        """多选模式下禁用自定义路径输入框和替换按钮（上传中也保持禁用）。"""
+        if not hasattr(self, "custom_path_edit"):
+            return
+        multi = self._replace_entry["multi"]
+        uploading = getattr(self, "_replace_pending", 0) > 0
+        self.custom_path_edit.setEnabled(not multi)
+        self.replace_custom_btn.setEnabled(not multi and not uploading)
+
+    def _on_replace_client(self):
+        """替换主干客户端：把文件复制到主干客户端的 autocode 脚本目录。"""
+        settings, ok = self._ensure_client_settings(("need_main",))
+        if not ok:
+            return
+        self._replace_client_local("主干客户端", settings["main_client_path"])
+
+    def _on_replace_branch_client(self, weeks_ago):
+        """替换本周/上周分支客户端：把文件复制到分支客户端的 autocode 脚本目录。"""
+        settings, ok = self._ensure_client_settings(("need_branch",))
+        if not ok:
+            return
+        wed = latest_wednesday_mmdd(weeks_ago=weeks_ago)
+        exe_path = str(Path(settings["branch_root_dir"]) / wed / "game" / "game.exe")
+        which = "本周分支客户端" if weeks_ago == 0 else "上周分支客户端"
+        self._replace_client_local("%s（%s）" % (which, wed), exe_path)
+
+    def _replace_client_local(self, label, exe_path):
+        """把已选文件复制到本地客户端 autocode 脚本目录（由 exe 路径推导）。
+
+        例如 exe 为 E:/y11_designer/game/game.exe，
+        目标目录为 E:/y11_designer/game/game_Data/StreamingAssets/script/autocode，
+        再拼接上传文件 autocode 之后的相对路径。
+        """
+        path = self.drop_area.path()
+        if not path:
+            QMessageBox.information(self, "提示", "请先拖入或选择要替换的文件")
+            return
+        sub = autocode_relative_path(path)
+        if sub is None:
+            QMessageBox.warning(self, "无法替换", "文件路径必须位于 autocode 目录下：\n%s" % path)
+            return
+        exe = Path(exe_path)
+        autocode_dir = exe.parent / (exe.stem + "_Data") / "StreamingAssets" / "script" / "autocode"
+        dest = Path(str(autocode_dir) + sub)
+        if not autocode_dir.is_dir():
+            QMessageBox.warning(
+                self, "错误",
+                "%s的 autocode 目录不存在：\n%s\n请确认客户端已正确安装/构建。" % (label, autocode_dir),
+            )
+            self._append_to_log('[%s] <span style="color:#c62828">替换%s失败：目录不存在 %s</span>'
+                                % (now_str(), esc(label), esc(str(autocode_dir))), self.replace_log)
+            return
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, dest)
+        except OSError as exc:
+            self._append_to_log('[%s] <span style="color:#c62828">替换%s失败：%s</span>'
+                                % (now_str(), esc(label), esc(str(exc))), self.replace_log)
+            return
+        self._append_to_log('[%s] <span style="color:#1e7e34">替换%s成功</span>'
+                            '<br><span style="color:#666">目标路径：</span>%s'
+                            % (now_str(), esc(label), esc(str(dest))), self.replace_log)
+
+    # ---------- 配置目录 ----------
+    def _on_config_dir_menu(self, pos):
+        """「打开配置目录」按钮右键菜单：设置配置目录。"""
+        menu = QMenu(self)
+        act = menu.addAction("设置配置目录…")
+        chosen = menu.exec(self.open_config_btn.mapToGlobal(pos))
+        if chosen == act:
+            self._open_config_dir_dialog()
+
+    def _open_config_dir_dialog(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("设置配置目录")
+        dlg.setMinimumWidth(500)
+
+        edit = QLineEdit()
+        edit.setPlaceholderText("配置目录，例如 E:/y11_designer/C-策划导表/autocode")
+        edit.setText(load_client_settings().get("config_dir", ""))
+
+        def pick():
+            path = QFileDialog.getExistingDirectory(dlg, "选择配置目录")
+            if path:
+                edit.setText(path)
+
+        form = QFormLayout(dlg)
+        row = QHBoxLayout()
+        row.addWidget(edit, 1)
+        pick_btn = QPushButton("选择…")
+        pick_btn.clicked.connect(pick)
+        row.addWidget(pick_btn)
+        wrap = QWidget()
+        wrap.setLayout(row)
+        form.addRow("配置目录：", wrap)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Save).setText("保存")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        form.addRow(buttons)
+
+        def accept():
+            settings = load_client_settings()
+            settings["config_dir"] = edit.text().strip()
+            save_client_settings(settings)
+            dlg.accept()
+
+        buttons.accepted.connect(accept)
+        buttons.rejected.connect(dlg.reject)
+        dlg.exec()
+
+    def _on_open_config_dir(self):
+        """打开配置目录（未配置时引导设置，右键按钮也可设置）。"""
+        config_dir = load_client_settings().get("config_dir", "")
+        if not config_dir:
+            answer = QMessageBox.question(
+                self, "配置目录未配置",
+                "尚未设置配置目录（右键「打开配置目录」按钮可随时设置）。\n\n是否现在设置？",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            self._open_config_dir_dialog()
+            config_dir = load_client_settings().get("config_dir", "")
+            if not config_dir:
+                return
+        if not Path(config_dir).is_dir():
+            QMessageBox.warning(
+                self, "错误",
+                "配置目录不存在：\n%s\n请右键「打开配置目录」按钮重新设置。" % config_dir,
+            )
+            return
+        try:
+            if sys.platform == "win32":
+                os.startfile(config_dir)
+            else:
+                webbrowser.open(Path(config_dir).as_uri())
+        except Exception as exc:
+            QMessageBox.warning(self, "错误", "打开配置目录失败：\n%s" % exc)
 
     def _build_server_tab(self):
         """服务器指令页签，包含服务器列表、报错监控、指令、日志。"""
@@ -663,33 +1378,11 @@ class MainWindow(QWidget):
         left = QVBoxLayout()
         left.setSpacing(8)
 
-        left.addWidget(self._title("服务器"))
-        tools = QHBoxLayout()
-        self.add_btn = QPushButton("添加服务器")
-        self.add_btn.clicked.connect(self._on_add)
-        self.multi_btn = QPushButton("多选")
-        self.multi_btn.setCheckable(True)
-        self.multi_btn.setStyleSheet(MULTI_BTN_QSS)
-        self.multi_btn.setToolTip("启用后可同时选中多台服务器，指令会发送给所有选中的服务器")
-        self.multi_btn.toggled.connect(self._on_toggle_multi)
-        tools.addWidget(self.add_btn)
-        tools.addWidget(self.multi_btn)
-        left.addLayout(tools)
-
-        self.server_area = QScrollArea()
-        self.server_area.setWidgetResizable(True)
-        self.server_host = QWidget()
-        self.server_grid = QGridLayout(self.server_host)
-        self.server_grid.setContentsMargins(2, 2, 2, 2)
-        self.server_grid.setSpacing(6)
-        self.server_area.setWidget(self.server_host)
-        left.addWidget(self.server_area, 1)
-
-        self.button_group = QButtonGroup(self)
-        self.button_group.setExclusive(True)
+        left.addWidget(self._build_server_section())
+        self._server_entry = self._server_lists[-1]
 
         # 报错监控：每种日志一个开关，作用于当前选中的服务器；可多服务器同时开
-        left.addWidget(self._title("报错监控（对当前选中服务器生效）"))
+        left.addWidget(self._title("报错监控（选中服务器生效，可多服务器同时开）"))
         mon_grid = QGridLayout()
         mon_grid.setSpacing(4)
         self._monitor_buttons = {}
@@ -732,10 +1425,8 @@ class MainWindow(QWidget):
                     more_btn = QPushButton("更多…")
                     more_btn.setMinimumHeight(40)
                     more_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-                    more_btn.setToolTip("点击打开更多指令窗口")
-                    more_btn.clicked.connect(
-                        lambda _=False, cmds=more_cmds: self._show_more_dialog(cmds)
-                    )
+                    more_btn.setToolTip("点击打开更多指令窗口；在窗口中可新增、编辑、删除自定义指令")
+                    more_btn.clicked.connect(lambda _=False: self._show_more_dialog())
                     self.cmd_buttons.append(more_btn)
                     row_h.addWidget(more_btn, 1)
                     continue
@@ -745,6 +1436,11 @@ class MainWindow(QWidget):
                 btn.setMinimumHeight(40)
                 btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
                 btn.clicked.connect(lambda _=False, c=cmd: self._on_run(c))
+                if cmd["key"] == "swgroup":
+                    btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                    btn.customContextMenuRequested.connect(
+                        lambda pos, b=btn: self._show_group_view_menu(b)
+                    )
                 self.cmd_buttons.append(btn)
 
                 cell = QWidget()
@@ -806,8 +1502,8 @@ class MainWindow(QWidget):
 
         left_widget = QWidget()
         left_widget.setLayout(left)
-        left_widget.setMinimumWidth(460)
-        left_widget.setMaximumWidth(460)
+        left_widget.setMinimumWidth(480)
+        left_widget.setMaximumWidth(480)
         root.addWidget(left_widget)
 
         # 右列：执行日志
@@ -844,57 +1540,67 @@ class MainWindow(QWidget):
         return label
 
     def _refresh_server_buttons(self):
-        for btn in list(self.button_group.buttons()):
-            self.button_group.removeButton(btn)
-        while self.server_grid.count():
-            item = self.server_grid.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+        # 清空所有页签里的服务器列表
+        for entry in self._server_lists:
+            group, grid = entry["group"], entry["grid"]
+            for btn in list(group.buttons()):
+                group.removeButton(btn)
+            while grid.count():
+                item = grid.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.setParent(None)
+                    widget.deleteLater()
 
-        if self._selected is not None and not (0 <= self._selected < len(self.servers)):
-            self._selected = None
-        self._multi_selected = {i for i in self._multi_selected if 0 <= i < len(self.servers)}
+        for entry in self._server_lists:
+            group, grid = entry["group"], entry["grid"]
+            # 越界下标修正（服务器被删除/移动后）
+            sel = entry["selected"]
+            if sel is not None and not (0 <= sel < len(self.servers)):
+                entry["selected"] = None
+            entry["multi_selected"] = {i for i in entry["multi_selected"] if 0 <= i < len(self.servers)}
 
-        for idx, srv in enumerate(self.servers):
-            btn = QPushButton()
-            btn._full_text = '%s  #%s' % (srv["name"], srv["number"])
-            btn.setText(btn._full_text)
-            btn.setCheckable(True)
-            if self._multi:
-                btn.setChecked(idx in self._multi_selected)
-            else:
-                btn.setChecked(idx == self._selected)
-            btn.setMinimumHeight(38)
-            btn.setStyleSheet(SERVER_BTN_QSS)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setToolTip('名称：%s\n编号：%s\n机器：%s' % (srv["name"], srv["number"], srv["machine"]))
-            btn.clicked.connect(lambda _=False, i=idx: self._on_select(i))
-            btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            btn.customContextMenuRequested.connect(
-                lambda pos, i=idx, b=btn: self._on_server_menu(i, b, pos)
-            )
-            self.button_group.addButton(btn, idx)
-            row, col = divmod(idx, 3)
-            self.server_grid.addWidget(btn, row, col)
-        # 三列等宽
-        for c in range(3):
-            self.server_grid.setColumnStretch(c, 1)
-        self.server_grid.setRowStretch(self.server_grid.rowCount(), 1)
+            group.setExclusive(not entry["multi"])
+            for idx, srv in enumerate(self.servers):
+                btn = QPushButton()
+                btn._full_text = '%s  #%s' % (srv["name"], srv["number"])
+                btn.setText(btn._full_text)
+                btn.setCheckable(True)
+                if entry["multi"]:
+                    btn.setChecked(idx in entry["multi_selected"])
+                else:
+                    btn.setChecked(idx == entry["selected"])
+                btn.setMinimumHeight(38)
+                btn.setStyleSheet(SERVER_BTN_QSS)
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setToolTip('名称：%s\n编号：%s\n机器：%s' % (srv["name"], srv["number"], srv["machine"]))
+                btn.clicked.connect(lambda _=False, e=entry, i=idx, b=btn: self._on_select(e, i, b))
+                btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                btn.customContextMenuRequested.connect(
+                    lambda pos, i=idx, b=btn: self._on_server_menu(i, b, pos)
+                )
+                group.addButton(btn, idx)
+                row, col = divmod(idx, 3)
+                grid.addWidget(btn, row, col)
+            # 三列等宽
+            for c in range(3):
+                grid.setColumnStretch(c, 1)
+            grid.setRowStretch(grid.rowCount(), 1)
         self._refresh_monitor_buttons()
+        self._refresh_custom_path_default()
         # 延迟一帧后计算省略文本（此时按钮已有实际宽度）
         QTimer.singleShot(0, self._update_server_btn_elide)
 
     def _update_server_btn_elide(self):
         """根据当前按钮实际宽度，重新计算省略文本。"""
         metrics = self.fontMetrics()
-        for btn in list(self.button_group.buttons()):
-            full = getattr(btn, "_full_text", btn.text())
-            available = btn.width() - 28  # 减去左右 padding + 边框
-            if available <= 0:
-                continue
-            btn.setText(metrics.elidedText(full, Qt.TextElideMode.ElideRight, available))
+        for entry in self._server_lists:
+            for btn in list(entry["group"].buttons()):
+                full = getattr(btn, "_full_text", btn.text())
+                available = btn.width() - 28  # 减去左右 padding + 边框
+                if available <= 0:
+                    continue
+                btn.setText(metrics.elidedText(full, Qt.TextElideMode.ElideRight, available))
 
     def resizeEvent(self, event):
         """窗口尺寸变化时，重新计算服务器按钮的省略文本。"""
@@ -902,7 +1608,7 @@ class MainWindow(QWidget):
         QTimer.singleShot(0, self._update_server_btn_elide)
 
     # ---------- 服务器管理 ----------
-    def _on_add(self):
+    def _on_add(self, entry=None):
         dlg = ServerDialog("添加服务器", parent=self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
@@ -912,7 +1618,13 @@ class MainWindow(QWidget):
             return
         self.servers.append({"name": name, "number": number, "machine": machine})
         save_servers(self.servers)
-        self._selected = len(self.servers) - 1
+        # 只选中发起添加的那个页签里的新服务器
+        if entry is not None:
+            new_idx = len(self.servers) - 1
+            if entry["multi"]:
+                entry["multi_selected"].add(new_idx)
+            else:
+                entry["selected"] = new_idx
         self._refresh_server_buttons()
         self._append('已添加服务器：<b>%s</b>（编号 %s，机器 %s）' % (esc(name), esc(number), esc(machine)))
 
@@ -969,32 +1681,34 @@ class MainWindow(QWidget):
             self._move_server(idx, len(self.servers) - 1)
 
     def _move_server(self, from_idx, to_idx):
-        """移动服务器，同步修复 _selected / _multi_selected / 监控 mkey 的映射。"""
+        """移动服务器，同步修复各页签选中下标与监控 mkey 的映射。"""
         if from_idx == to_idx or not (0 <= to_idx < len(self.servers)):
             return
         srv = self.servers.pop(from_idx)
         self.servers.insert(to_idx, srv)
         save_servers(self.servers)
-        # 修复单选下标
-        if self._selected is not None:
-            if self._selected == from_idx:
-                self._selected = to_idx
-            elif from_idx < self._selected <= to_idx:
-                self._selected -= 1
-            elif to_idx <= self._selected < from_idx:
-                self._selected += 1
-        # 修复多选下标
-        new_multi = set()
-        for i in self._multi_selected:
-            if i == from_idx:
-                new_multi.add(to_idx)
-            elif from_idx < i <= to_idx:
-                new_multi.add(i - 1)
-            elif to_idx <= i < from_idx:
-                new_multi.add(i + 1)
-            else:
-                new_multi.add(i)
-        self._multi_selected = new_multi
+        for entry in self._server_lists:
+            # 修复单选下标
+            sel = entry["selected"]
+            if sel is not None:
+                if sel == from_idx:
+                    entry["selected"] = to_idx
+                elif from_idx < sel <= to_idx:
+                    entry["selected"] = sel - 1
+                elif to_idx <= sel < from_idx:
+                    entry["selected"] = sel + 1
+            # 修复多选下标
+            new_multi = set()
+            for i in entry["multi_selected"]:
+                if i == from_idx:
+                    new_multi.add(to_idx)
+                elif from_idx < i <= to_idx:
+                    new_multi.add(i - 1)
+                elif to_idx <= i < from_idx:
+                    new_multi.add(i + 1)
+                else:
+                    new_multi.add(i)
+            entry["multi_selected"] = new_multi
         self._refresh_server_buttons()
         self._append('已移动服务器「%s」：#%d → #%d'
                      % (esc(srv["name"]), from_idx + 1, to_idx + 1))
@@ -1011,67 +1725,206 @@ class MainWindow(QWidget):
         self._stop_server_monitors(srv)
         self.servers.pop(idx)
         save_servers(self.servers)
-        self._multi_selected = {
-            i if i < idx else i - 1 for i in self._multi_selected if i != idx
-        }
-        if self._selected == idx:
-            self._selected = None
-        elif self._selected is not None and self._selected > idx:
-            self._selected -= 1
+        for entry in self._server_lists:
+            entry["multi_selected"] = {
+                i if i < idx else i - 1 for i in entry["multi_selected"] if i != idx
+            }
+            sel = entry["selected"]
+            if sel == idx:
+                entry["selected"] = None
+            elif sel is not None and sel > idx:
+                entry["selected"] = sel - 1
         self._refresh_server_buttons()
         self._append('已删除服务器：%s' % esc(srv["name"]))
 
-    def _on_toggle_multi(self, checked):
-        self._multi = checked
-        self.multi_btn.setText("已启用多选" if checked else "多选")
-        self.button_group.setExclusive(not checked)
+    def _on_toggle_multi(self, entry, checked):
+        """切换某个页签的多选模式（各页签互不影响）。"""
+        entry["multi"] = checked
+        entry["group"].setExclusive(not checked)
         if checked:
             # 进入多选时，把当前单选结果带过来
-            if self._selected is not None:
-                self._multi_selected = {self._selected}
-            self._selected = None
+            if entry["selected"] is not None:
+                entry["multi_selected"] = {entry["selected"]}
+            entry["selected"] = None
         else:
-            self._multi_selected.clear()
+            entry["multi_selected"].clear()
+        entry["multi_btn"].setText("已启用多选" if checked else "多选")
         self._refresh_server_buttons()
         self._refresh_monitor_buttons()
+        if entry is getattr(self, "_replace_entry", None):
+            self._update_custom_widgets_enabled()
 
-    def _on_select(self, idx):
-        if self._multi:
-            btn = self.button_group.button(idx)
-            if btn is not None and btn.isChecked():
-                self._multi_selected.add(idx)
+    def _on_select(self, entry, idx, btn=None):
+        if entry["multi"]:
+            target = btn if btn is not None else entry["group"].button(idx)
+            if target is not None and target.isChecked():
+                entry["multi_selected"].add(idx)
             else:
-                self._multi_selected.discard(idx)
-            return
-        self._selected = idx
+                entry["multi_selected"].discard(idx)
+        else:
+            entry["selected"] = idx
+        if entry is getattr(self, "_replace_entry", None):
+            self._refresh_custom_path_default()
         self._refresh_monitor_buttons()
 
-    def _current_index(self):
-        if self._selected is not None and 0 <= self._selected < len(self.servers):
-            return self._selected
+    def _current_index(self, entry=None):
+        entry = entry or getattr(self, "_server_entry", None)
+        if entry is None:
+            return None
+        sel = entry["selected"]
+        if sel is not None and 0 <= sel < len(self.servers):
+            return sel
         return None
 
-    def _target_indexes(self):
-        """本次指令要执行的所有服务器下标。"""
-        if self._multi:
-            return [i for i in sorted(self._multi_selected) if 0 <= i < len(self.servers)]
-        idx = self._current_index()
+    def _target_indexes(self, entry=None):
+        """本次指令要执行的所有服务器下标（默认取「服务器指令」页签的选中状态）。"""
+        entry = entry or getattr(self, "_server_entry", None)
+        if entry is None:
+            return []
+        if entry["multi"]:
+            return [i for i in sorted(entry["multi_selected"]) if 0 <= i < len(self.servers)]
+        idx = self._current_index(entry)
         return [] if idx is None else [idx]
 
     def _collect_selected_indices(self):
         """别名：返回当前选中范围的所有服务器下标（多选 / 单选通用）。"""
         return self._target_indexes()
 
+    # ---------- 群组查看 ----------
+    def _show_group_view_menu(self, btn):
+        """「切换群组」按钮右键菜单：提供「查看群组」入口。"""
+        menu = QMenu(self)
+        act = menu.addAction("查看群组")
+        act.triggered.connect(lambda _=False: self._show_group_list_dialog())
+        menu.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
+
+    def _show_group_list_dialog(self):
+        """弹出群组对照表（编号 ↔ 群组名称）。"""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("群组列表")
+        dlg.resize(360, 430)
+        layout = QVBoxLayout(dlg)
+        view = QPlainTextEdit()
+        view.setReadOnly(True)
+        view.setPlainText(GROUP_LIST_TEXT)
+        layout.addWidget(view)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(dlg.accept)
+        row.addWidget(close_btn)
+        layout.addLayout(row)
+        dlg.exec()
+
     # ---------- 更多指令弹窗 ----------
-    def _show_more_dialog(self, more_cmds):
-        """点击「更多」按钮时，弹出独立窗口列出 more_cmds（按钮格式与外层一致）。"""
-        dlg = MoreCommandsDialog(more_cmds, self)
+    def _custom_commands(self):
+        """把自定义指令定义转换成与 COMMANDS 同结构的指令项。"""
+        cmds = []
+        for idx, d in enumerate(self._custom_cmd_defs):
+            cmd = {
+                "key": "custom_%d" % idx,
+                "label": d["name"],
+                "op": d["op"],
+                "check_proc": d["check_proc"],
+                "more": True,
+                "custom": True,
+            }
+            if d.get("need_param"):
+                cmd["param"] = "arg"
+                cmd["param_name"] = "参数"
+            cmds.append(cmd)
+        return cmds
+
+    def _all_more_commands(self):
+        """「更多」窗口中的全部指令：内置的 more 指令 + 自定义指令（内置的保持原样）。"""
+        return [c for c in COMMANDS if c.get("more")] + self._custom_commands()
+
+    def _show_more_dialog(self):
+        """点击「更多」按钮时，弹出独立窗口列出更多指令（按钮格式与外层一致）。"""
+        dlg = MoreCommandsDialog(
+            self._all_more_commands(),
+            add_callback=self._add_custom_and_get_list,
+            edit_callback=self._edit_custom_command,
+            delete_callback=self._delete_custom_command,
+            parent=self,
+        )
         accepted = dlg.exec() == QDialog.DialogCode.Accepted
         chosen = dlg.chosen
         value = dlg.param_value
         dlg.deleteLater()
         if accepted and chosen is not None:
             self._on_run(chosen, param_override=value)
+
+    def _add_custom_and_get_list(self):
+        """在「更多」弹窗里新增指令后，返回更新后的指令列表供弹窗刷新。"""
+        self._on_add_custom_command()
+        return self._all_more_commands()
+
+    @staticmethod
+    def _custom_idx_from_key(key):
+        """把 custom_N 形式的 key 还原成 _custom_cmd_defs 的下标。"""
+        try:
+            return int(str(key).split("_", 1)[1])
+        except (ValueError, IndexError):
+            return -1
+
+    def _edit_custom_command(self, key):
+        idx = self._custom_idx_from_key(key)
+        if idx < 0 or idx >= len(self._custom_cmd_defs):
+            return self._all_more_commands()
+        dlg = AddCommandDialog(initial=self._custom_cmd_defs[idx], parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return self._all_more_commands()
+        name, op, need_param, check_proc = dlg.values()
+        if any(i != idx and d["op"].lower() == op.lower()
+               for i, d in enumerate(self._custom_cmd_defs)):
+            QMessageBox.information(self, "提示", "该指令已存在：%s" % op)
+            return self._all_more_commands()
+        self._custom_cmd_defs[idx] = {
+            "name": name, "op": op,
+            "need_param": need_param, "check_proc": check_proc,
+        }
+        save_custom_cmd_defs(self._custom_cmd_defs)
+        self._append('[%s] 已编辑指令：<b>%s</b>' % (now_str(), esc(name)))
+        return self._all_more_commands()
+
+    def _delete_custom_command(self, key):
+        idx = self._custom_idx_from_key(key)
+        if idx < 0 or idx >= len(self._custom_cmd_defs):
+            return self._all_more_commands()
+        d = self._custom_cmd_defs[idx]
+        answer = QMessageBox.question(
+            self, "确认删除", '确定删除自定义指令「%s」吗？' % d["name"]
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return self._all_more_commands()
+        del self._custom_cmd_defs[idx]
+        save_custom_cmd_defs(self._custom_cmd_defs)
+        self._append('[%s] 已删除指令：<b>%s</b>' % (now_str(), esc(d["name"])))
+        return self._all_more_commands()
+
+    def _on_add_custom_command(self):
+        dlg = AddCommandDialog(parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        name, op, need_param, check_proc = dlg.values()
+        if any(d["op"].lower() == op.lower() for d in self._custom_cmd_defs):
+            QMessageBox.information(self, "提示", "该指令已存在：%s" % op)
+            return
+        self._custom_cmd_defs.append({
+            "name": name,
+            "op": op,
+            "need_param": need_param,
+            "check_proc": check_proc,
+        })
+        save_custom_cmd_defs(self._custom_cmd_defs)
+        self._append(
+            '[%s] 已新增指令：<b>%s</b>（%s，%s，%s）'
+            % (now_str(), esc(name),
+               "带数字框" if need_param else "无参数",
+               "执行后检查进程" if check_proc else "不检查进程",
+               "指令 %s" % op)
+        )
 
     # ---------- 执行指令 ----------
     def _on_run(self, cmd, param_override=None):
@@ -1317,9 +2170,11 @@ class MainWindow(QWidget):
         form.addRow(buttons)
 
         def accept():
+            settings = load_client_settings()
             save_client_settings({
                 "main_client_path": main_edit.text().strip(),
                 "branch_root_dir": branch_edit.text().strip(),
+                "config_dir": settings.get("config_dir", ""),
             })
             dlg.accept()
 
@@ -1828,14 +2683,18 @@ class MainWindow(QWidget):
 
     # ---------- 日志 ----------
     def _append(self, html):
-        doc = self.log.document()
+        self._append_to_log(html, self.log)
+
+    def _append_to_log(self, html, log_widget):
+        doc = log_widget.document()
         cursor = QTextCursor(doc)
         cursor.movePosition(QTextCursor.MoveOperation.End)
         if not doc.isEmpty():
             cursor.insertBlock()
             cursor.setCharFormat(QTextCharFormat())
         cursor.insertHtml(html)
-        self._scroll_to_bottom()
+        bar = log_widget.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
     def _start_live_line(self, flow):
         """新增一个空块作为实时刷新的「等待中」状态行。"""
