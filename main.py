@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app_log import get_logger, setup_logging
 from config_search import ConfigSearchPage
 from gm_commands import GmCommandPage
 
@@ -113,6 +114,12 @@ def branch_options(count=5, today=None):
     latest = today - timedelta(days=offset)
     dates = [latest - timedelta(days=7 * i) for i in range(count)]
     return ["main"] + [d.strftime("%Y_%m_%d") for d in dates]
+
+
+def ymd_no_zero(d=None):
+    """返回不带前导零的 YYYY_M_D 格式日期，例如 2026_11_2。"""
+    d = d or date.today()
+    return "%d_%d_%d" % (d.year, d.month, d.day)
 
 
 def latest_wednesday(today=None, weeks_ago=0):
@@ -240,7 +247,6 @@ QPlainTextEdit {
     border: 1px solid #c9ced6;
     border-radius: 6px;
     background: #ffffff;
-    font-family: Consolas, "Microsoft YaHei", monospace;
 }
 """
 
@@ -764,8 +770,8 @@ class ViewLogDialog(QDialog):
         self.setWindowTitle("查看日志")
         self.setMinimumWidth(360)
 
-        self.date_edit = QLineEdit(date.today().strftime("%Y_%m_%d"))
-        self.date_edit.setPlaceholderText("时间，例如 2026_10_29")
+        self.date_edit = QLineEdit(ymd_no_zero())
+        self.date_edit.setPlaceholderText("时间，例如 2026_11_2")
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("日志名，例如 fight.log 或 fight")
 
@@ -908,7 +914,7 @@ class LogViewerDialog(QDialog):
         # 选中色默认深灰，改为深蓝底白字更醒目
         self._view.setFont(QFont("Consolas", 12))
         self._view.setStyleSheet(
-            "font-size: 14px;"
+            "font-size: 15px;"
             "selection-background-color: #1565c0; selection-color: #ffffff;"
         )
         # 自动换行：正文逗号后已插入零宽空格作为断点（长行在字段边界处折行），
@@ -925,6 +931,9 @@ class LogViewerDialog(QDialog):
         row = QHBoxLayout()
         row.addWidget(hint)
         row.addStretch(1)
+        self._browser_btn = QPushButton("浏览器打开")
+        self._browser_btn.setEnabled(bool(url))
+        self._browser_btn.clicked.connect(self._open_in_browser)
         self._refresh_btn = QPushButton("刷新")
         self._refresh_btn.clicked.connect(self._refresh_log)
         copy_btn = QPushButton("复制全部")
@@ -932,6 +941,7 @@ class LogViewerDialog(QDialog):
             lambda: QApplication.clipboard().setText(restore_log_text(self._view.toPlainText())))
         close_btn = QPushButton("关闭")
         close_btn.clicked.connect(self.accept)
+        row.addWidget(self._browser_btn)
         row.addWidget(self._refresh_btn)
         row.addWidget(copy_btn)
         row.addWidget(close_btn)
@@ -1085,6 +1095,13 @@ class LogViewerDialog(QDialog):
         row.addWidget(close_btn)
         lay.addLayout(row)
         dlg.exec()
+
+    # ---------- 浏览器打开 ----------
+    def _open_in_browser(self):
+        """用系统默认浏览器打开当前日志的请求 URL。"""
+        if not self._url:
+            return
+        webbrowser.open(self._url)
 
     # ---------- 刷新 ----------
     def _refresh_log(self):
@@ -1588,6 +1605,9 @@ class MainWindow(QWidget):
         else:
             self._append_to_log('[%s] <span style="color:#c62828">替换失败：%s</span>'
                                 % (now_str(), esc(name)), self.replace_log)
+            get_logger().warning(
+                "文件替换失败 | 服务器=%s | 目标=%s | %s", name, remote_path, message
+            )
         self._replace_pending -= 1
         if self._replace_pending <= 0:
             self.replace_srv_btn.setEnabled(True)
@@ -2813,6 +2833,8 @@ class MainWindow(QWidget):
             QMessageBox.information(self, "提示", "请先选中一台服务器")
             return
         any_changed = False
+        to_check_history = []  # 本次新开启监控的 (mkey, srv, log_def) 列表
+        today_ymd = ymd_no_zero()
         for idx in targets:
             srv = self.servers[idx]
             mkey = (id(srv), log_def["key"])
@@ -2824,11 +2846,12 @@ class MainWindow(QWidget):
                     "log": log_def,
                     "last_ts": None,
                     "baseline_done": False,
-                    "poll_date": date.today().strftime("%Y_%m_%d"),
+                    "poll_date": today_ymd,
                     "fail": 0,
                 }
                 self._append('[%s] <b>开始监控「%s报错」</b>' % (esc(srv["name"]), esc(log_def["label"])))
                 any_changed = True
+                to_check_history.append((mkey, srv, log_def))
             else:
                 state = self._monitors.pop(mkey, None)
                 if state is None:
@@ -2837,6 +2860,62 @@ class MainWindow(QWidget):
                 any_changed = True
         if any_changed:
             self._sync_monitor_timer()
+        # 开启监控后，异步检查是否有历史报错
+        if to_check_history:
+            jobs = []
+            for mkey, srv, ld in to_check_history:
+                url = '%s%s %s %s/%s' % (
+                    MACHINE_PREFIX[srv["machine"]], LOG_OP, srv["number"], today_ymd, ld["file"],
+                )
+                jobs.append((mkey, url))
+            poller = MonitorPoller(self)
+            poller.set_jobs(jobs)
+            poller.polled.connect(
+                lambda results, srvs={id(srv): srv for _, srv, _ in to_check_history},
+                logs={ld["key"]: ld for _, _, ld in to_check_history}:
+                self._on_initial_history_checked(results, srvs, logs)
+            )
+            poller.finished.connect(lambda p=poller: p.deleteLater())
+            poller.start()
+
+    def _on_initial_history_checked(self, results, srv_map, log_map):
+        """开启监控后的历史报错检查回调；有报错时弹窗提示。"""
+        has_errors = []  # [(srv_name, log_label, blocks)]
+        for mkey, ok, body, error in results:
+            srv = srv_map.get(mkey[0])
+            ld = log_map.get(mkey[1])
+            if srv is None or ld is None or not ok or not body:
+                continue
+            blocks = self._split_error_blocks(body)
+            if blocks:
+                has_errors.append((srv["name"], ld["label"], blocks))
+        if not has_errors:
+            return
+        # 有历史报错，弹窗展示
+        self._show_initial_history_dialog(has_errors)
+
+    def _show_initial_history_dialog(self, errors):
+        """开启监控后发现历史报错时的弹窗。errors: [(srv_name, log_label, [(ts, content), ...]), ...]"""
+        all_blocks = []
+        for srv_name, log_label, blocks in errors:
+            header = '<span style="color:#c62828;font-weight:bold">[服务器：%s / %s报错]</span>' % (
+                esc(srv_name), esc(log_label)
+            )
+            rendered_parts = []
+            for _, content in blocks:
+                html = esc(content)
+                html = ERROR_TIME_RE.sub(
+                    lambda m: '<span style="color:#2f7ded;font-size:16px;font-weight:bold">[%s]traceback:</span>'
+                              % m.group(1),
+                    html,
+                )
+                rendered_parts.append(html.replace("\n", "<br/>"))
+            all_blocks.append(header + "<br/>" + ("<hr/>".join(rendered_parts)))
+        combined = "<hr/><hr/>".join(all_blocks)
+        title = "存在历史报错信息（%d 台服务器共 %d 类日志）" % (
+            len({s for s, _, _ in errors}), len(errors)
+        )
+        self._show_combined_errors(title, combined)
 
     def _on_monitor_menu(self, log_def, btn, pos):
         """监控按钮右键：查看该日志类型在当前选中服务器上的历史报错。"""
@@ -2852,7 +2931,7 @@ class MainWindow(QWidget):
         if not targets:
             QMessageBox.information(self, "提示", "请先选中一台服务器")
             return
-        today_ymd = date.today().strftime("%Y_%m_%d")
+        today_ymd = ymd_no_zero()
         errors_per_srv = []  # [(srv_name, [content, ...]), ...]
         failed = []
         empty = []
@@ -2949,7 +3028,7 @@ class MainWindow(QWidget):
     def _monitor_tick(self):
         if not self._monitors:
             return
-        today_ymd = date.today().strftime("%Y_%m_%d")
+        today_ymd = ymd_no_zero()
         # 跨天：日期变更后所有监控一起停止并提示
         stale = [k for k, st in self._monitors.items() if st["poll_date"] != today_ymd]
         if stale:
@@ -3001,6 +3080,10 @@ class MainWindow(QWidget):
         srv, log_def = state["srv"], state["log"]
         if not ok:
             state["fail"] += 1
+            get_logger().warning(
+                "监控拉取失败 | 服务器=%s | %s报错 | 连续失败 %d 次 | %s",
+                srv["name"], log_def["label"], state["fail"], error,
+            )
             if state["fail"] >= 3:
                 self._monitors.pop(mkey, None)
                 self._append(
@@ -3078,6 +3161,15 @@ class MainWindow(QWidget):
             head = '<span style="color:#c62828;font-weight:bold">✘ 执行失败</span>'
         else:
             head = '<span style="color:#c62828;font-weight:bold">✘ 执行失败（HTTP %s）</span>' % status
+        if not ok:
+            get_logger().warning(
+                "指令执行失败 | 服务器=%s | 步骤=%s | HTTP=%s | 耗时=%.2f秒 | %s",
+                srv["name"],
+                step.get("label", ""),
+                status if status is not None else "无响应",
+                elapsed,
+                (body or "")[:500],
+            )
         self._finish_live(flow, '[%s] [%s] %s　耗时 %.2f 秒' % (now_str(), esc(srv["name"]), head, elapsed))
 
         if status is None:
@@ -3267,6 +3359,8 @@ def main():
         print(detail, file=sys.stderr)
 
     sys.excepthook = _excepthook
+
+    setup_logging(DATA_DIR, "测试工具")
 
     app = QApplication(sys.argv)
     app.setApplicationName("测试工具")
