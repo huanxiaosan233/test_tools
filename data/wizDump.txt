@@ -1,0 +1,396 @@
+cmd:add_battle_coin     desc:添加武勋货币[add_battle_coin cnt]
+cmd:add_coin     desc:添加铜钱[add_coin cnt]
+cmd:release_force     desc:一键解散所有部曲
+cmd:cal_flag_cnt     desc:计算两点所需占旗数量[cal_flag_cnt gx,gz,tx,tz]
+cmd:test_add_source     desc:添加兵符[add_source_soldier cnt sKind]
+cmd:add_hero_exp     desc:增加英雄经验[add_hero_exp heroType,exp]
+cmd:add_base_soldier     desc:增加后备兵[add_base_soldier cnt]
+cmd:print_grid_idx     desc:打印格子州郡县编号[print_grid_idx x,z]
+cmd:wiz_printSoldierBonus     desc:打印兵营加成
+cmd:cbattle_delay_end     desc:[城战延迟结束[cbattle_delay_end 1/0]]
+cmd:add_source_soldier     desc:添加兵符[add_source_soldier cnt sKind]
+cmd:horse_score     desc:赛马指令 horse_score score
+cmd:lunar_word     desc:集字活动[lottery_act idx confCnt]1设置解锁卦象数 2生成满足条件机器人 3打印大奖得主 4跳转到下一阶段 5设置奖励已领取次数
+cmd:test_hero_pool     desc:测试抽将[test_hero_pool poolType, cnt, isRecord, stage, poolIdx, actId]
+cmd:add_season_shop_coin     desc:赛季商店[add_season_shop_coin cnt]
+cmd:city_bat_end     desc:城战结束
+cmd:wiz_ubus_point     desc:不扣贸易次数[wiz_ubus_point 1]
+cmd:code     desc:执行服务端代码[code codeString]
+cmd:test_cdk     desc:测试兑换码[test_cdk userId]
+cmd:add_sarms_score     desc:加兵装积分 add_sarms_score score
+cmd:add_job_exp     desc:获得职业经验 add_job_exp exp
+cmd:set_tech     desc:设置科技[set_tech techId,lev]
+cmd:finish_act_task     desc:完成活动任务[finish_act_task actType,taskType]
+cmd:game_load     desc:正式开服[game_load]
+cmd:reset_job     desc:转职 reset_job jobType
+cmd:full_union_tech     desc:满联盟科技[full_union_tech lev]
+cmd:unlimited_declare_time     desc:去掉宣战时间限制[unlimited_declare_time]
+cmd:add_area_wall     desc:修改城防值[add_area_wall val]
+cmd:mwp_test     desc:多点争夺压测 mwp_test v(1.传送, 2.抢野, 3打地方, 4开计时器, 5创建盟友(150)
+cmd:do_all_build_ship_task     desc:完成造船每日任务[do_all_build_ship_task]
+cmd:mw_cmd     desc:蛮王活动指令 mw_cmd 1生成挑战 2结算 3加积分 4生成指定数量满级盟友 5所有盟友一起打boss 6蛮王自动测试 7停止自动测试
+cmd:set_hero_star     desc:设置武将星级,无starCnt默认满星,无heroType默认全部武将[set_hero_star starCnt, heroType]
+cmd:att_bandit     desc:收缴/讨伐野怪[att_bandit gx,gz,fidx]
+cmd:add_zhulu_bp_exp     desc:添加逐鹿战令经验
+cmd:pre_nb     desc:前置新手入口[pre_nb v]
+cmd:daybegin_gatt     desc:关隘自动出兵重置当天玩法 daybegin_gatt
+cmd:occ_ground     desc:占领地块[occ_ground gx, gz]
+cmd:cal_dis     desc:计算两点寻路距离[cal_dis gx,gz,tx,tz]
+cmd:imm_gatt     desc:关隘立即自动出兵 imm_gatt
+cmd:add_food     desc:添加粮食[add_food cnt]
+cmd:castle_incity     desc:检查哨塔是否在城池领地内
+cmd:gate_bat_end     desc:关隘战结束 [gate_bat_end v(0/1)]
+cmd:full_tech     desc:满科技
+cmd:stop_gift     desc:关闭福利[stop_gift giftId]
+cmd:quick_pub_reward     desc:快速获取酒馆奖励[quick_pub_reward pubLev, cnt]
+cmd:start_mdoor     desc:开启奇门遁甲活动[start_mdoor actId, afterSec, runSec]
+cmd:check_flash_point     desc:测试瞬移路点[check_flash_point]
+cmd:del_godbeast     desc:清除神兽 del_godbeast gbType
+cmd:add_wild_box_ore     desc:增加披沙沥金矿石[add_wild_box_ore boxLev, cnt]
+cmd:add_metal     desc:增加铁矿[add_metal cnt]
+cmd:sub_base_soldier     desc:减少后备兵[sub_base_soldier cnt]
+cmd:fight_rec     desc:测试战报: [fight_rec 1/不填(不填对方没有联盟)]
+cmd:wuchao_cmd     desc:wuchao_cmd 1/2/3
+cmd:sp_soldier     desc:添加特殊兵道具[sp_soldier]
+cmd:clean_inherit_cd     desc:清除武将继承cd[clean_inherit_cd]
+cmd:test_zhulu_create_room     desc:test[test_zhulu_create_room cmd,matchType,cnt]
+cmd:set_nian_monster_hp     desc:设置年兽血量
+cmd:add_alliance_score     desc:增加阵营积分
+cmd:et_test_data     desc:护商联盟测试数据[et_test_data wallPer, grade, passSec]
+cmd:set_const     desc:设置const常量
+cmd:add_battle_point     desc:添加武勋[add_battle_point ptype(1or2) cnt]
+cmd:lyt_test     desc:测试入口
+cmd:auto_cboss     desc:全盟自动打神兽auto_cboss 1/0(1为挑战,0为结束) cityType configId
+cmd:wild_box_refresh     desc:刷新披沙沥金宝箱[wild_box_refresh]
+cmd:clear_item     desc:清空道具[clear_item]
+cmd:zhulu_up_rank     desc:逐鹿上榜
+cmd:set_sarms_level     desc:改兵装打造等级 set_sarms_level level
+cmd:show_sec     desc:显示时间sec[show_sec]
+cmd:add_ubusactive     desc:增加贸易积分[add_ubusactive cnt]
+cmd:print_resgrd     desc:打印资源地信息[print_resgrd]
+cmd:tired_force     desc:增加所有部队疲劳值[tired_force number]
+cmd:set_alliance     desc:设置阵营,101/102
+cmd:stop_act     desc:开启活动[stop_act actId]
+cmd:qzrob_log     desc:青州贼数量log
+cmd:mdoor_cmd     desc:奇门遁甲指令 mdoor_cmd
+cmd:discuss_rank     desc:策论排行打印
+cmd:power_cmd     desc:势力特性 power_cmd
+cmd:gridPos_to_cPos     desc:地块坐标转成C坐标[gridPos_to_cPos gx,gz]
+cmd:add_gb_elixir     desc:加灵兽仙丹 add_gb_elixir cnt
+cmd:show_gate_grid     desc:关隘范围周围格子展示[show_gate_grid gateType,showType(1,2)]
+cmd:add_item_to_other_user     desc:给其他玩家加道具
+cmd:add_qzRob     desc:刷野怪[add_bandit x,y,level, bKind ]
+cmd:add_weapon     desc:添加装备[add_weapon heroType, firmCnt]
+cmd:save_User_Task_data     desc:保存已有任务进度
+cmd:unlock_qz     desc:测试入口
+cmd:add_ban     desc:新增禁言禁人[add_ban banType(1=封号 2=禁言 3=封账号),banTime]
+cmd:add_many_item     desc:增加多种道具 [add_many_item itemType##cnt##itemType##cnt]
+cmd:get_area_id     desc:显示主城
+cmd:newtask_super     desc:完成指定章节以及之前的任务并领奖 newtask_super chapId
+cmd:add_dec_cnt     desc:增加宣战令牌
+cmd:occupy_city     desc:占领城市[occupy_city cityType]
+cmd:acc_fight_win     desc:[加速战斗胜利[acc_fight_win]]
+cmd:add_run_bus_coin     desc:增加跑商金币积分[add_run_bus_coin cnt]
+cmd:break_city_safe     desc:去掉城池安全保护限制[break_city_safe]
+cmd:fight_harm_low     desc:降低战斗伤害[fight_harm_low]
+cmd:union_accflag     desc:全盟加速建造烽火台 union_accflag gx, gz
+cmd:build_flag     desc:建造旗子[build_flag gx, gz]
+cmd:clear_luoyang_rank     desc:测试洛阳排行[test_luoyang_rank occTime]
+cmd:stele_cmd     desc:圣杯压测指令 stele_cmd 0准备压测(自动获取所有圣杯) 1开始压测 2停止压测 3查询压测状态 4设置/查询移动速度(speed)
+cmd:show_boss_pos     desc:测试入口
+cmd:test2     desc:测试入口
+cmd:act1009_kill     desc:增加1009活动积分[act1009_kill point]
+cmd:test_discuss     desc:九州议事简单跑测,一天一轮,直接开始第几轮,[test_discuss roundIdx]
+cmd:test_zhulu_center     desc:test[test_zhulu_center cmd,p1,p2...]
+cmd:set_run_bus_speed     desc:设置跑商速度[set_run_bus_speed speed(/h)]
+cmd:check_alliance     desc:检查联盟阵营
+cmd:change_area     desc:移动主城[change_area x,z,isChangeBorn,igBlock]
+cmd:ssuper_hero     desc:满养成武将
+cmd:test_mail_soldier     desc:test_mail_soldier cnt
+cmd:send_mail     desc:发送邮件[send_mail, mailId]
+cmd:dragon_wiz     desc:大龙指令[dragon_wiz 1(下一阶段)]
+cmd:sub_source_soldier     desc:添加兵符[sub_source_soldier cnt sKind]
+cmd:unlock_nbtask_rg     desc:一键解锁当前主线进度的资源地相关功能[unlock_nbtask_rg]
+cmd:add_adorn_cnt     desc:新增装扮次数[add_adorn_cnt adordId, cnt]
+cmd:wiz_full_talent     desc:满武将天赋[wiz_full_talent heroType]
+cmd:acc_srv_hour     desc:加速时间[acc_srv_hour hour,min,sec,backTag(log时间)]
+cmd:add_qzRob_cnt     desc:增加青州次数 add_qzRob_cnt cnt
+cmd:test_auto_cbattle     desc:测试自动打城[test_auto_cbattle castleId]
+cmd:add_union_devote     desc:增加联盟贡献[add_union_devote devoteType,value]
+cmd:clear_gold     desc:清空银锭[clear_gold]
+cmd:hot_area_wiz     desc:加战役区域点位[hot_area_add_fight gx, gz]
+cmd:auto_play     desc:模拟日常[auto_play]
+cmd:show_coff_grid     desc:洛阳偏移点位格子展示[show_coff_grid offx,offz]
+cmd:fight_sim     desc:模拟战斗[fight_sim]
+cmd:print_uid     desc:打印玩家id
+cmd:wiz_update_cross_dps_rank     desc:更新跨服DPS排行榜
+cmd:test_open_red_envelope     desc:机器人领取红包
+cmd:clear_res     desc:清空资源[clear_res]
+cmd:lottery_act     desc:集字活动[lottery_act idx confCnt]1设置解锁卦象数 2生成满足条件机器人 3打印大奖得主 4跳转到下一阶段 5设置奖励已领取次数
+cmd:refresh_cuser     desc:重刷中心服角色数据
+cmd:gb_lev     desc:神兽等级 gb_lev gbType, level
+cmd:arms_don     desc:兵装一键橙装 arms_don
+cmd:sxy_test     desc:测试入口
+cmd:print_honor_info     desc:打印荣勋数据
+cmd:drop_collect_words     desc:剿贼集令掉落字符[drop_collect_words]
+cmd:add_honor_rec     desc:添加荣勋记录
+cmd:test_lw     desc:测试入口
+cmd:test_crossbow     desc:test[test_crossbow gx, gz]
+cmd:wiz_cross_auc     desc:跨服拍卖
+cmd:finsh_season_achieve     desc:完成个人成就[finsh_season_achieve taskType(不填完成所有)]
+cmd:dayend_gatt     desc:关隘自动出兵当天最后一波 dayend_gatt
+cmd:set_return_flow_act_value     desc:设置回流玩家的数据[玩家总充值翠玉数，玩家最大主城等级]
+cmd:open_return_flow_act     desc:开启回流资格
+cmd:wiz_clear_fish     desc:清空自己钓鱼图鉴和排行榜数据
+cmd:add_union_exploit     desc:添加联盟功勋值[add_union_exploit cnt]
+cmd:full_union_res     desc:满联盟资源[full_union_res]
+cmd:test_soldier_mail     desc:发送新手返还预备兵邮件[test_soldier_mail mailId,cnt]
+cmd:set_job_grade     desc:设置职业学识 set_job_grade grade
+cmd:uplev_inresgrd     desc:内城资源地修改等级 uplev_inresgrd posId, level
+cmd:add_hero     desc:添加武将[add_hero heroType,promotionLv]
+cmd:add_fish_play_count     desc:增加钓鱼次数
+cmd:wiz_add_fish     desc:添加指定的鱼
+cmd:clear_real_gold     desc:清空元宝[clear_real_gold]
+cmd:catch_up_cmd     desc:追赶机制指令[catch_up_cmd 1/2/3]
+cmd:cPos_to_gridPos     desc:c坐标转成地块坐标[cPos_to_gridPos x,z]
+cmd:hangup_user     desc:挂起玩家: [hangup_user userId]
+cmd:test_same_att     desc:同步器进攻记录测试 userId1,userId2,userId3
+cmd:zhulu_settle_rank     desc:逐鹿结算排行榜
+cmd:add_wood     desc:增加木材[add_wood cnt]
+cmd:do_fenghua_rank_settle     desc:风华榜结算
+cmd:test_chess     desc:测试比武pvp
+cmd:refresh_callout     desc:刷新计时器[ref_call_out]
+cmd:slow_speed_rate     desc:急行军[slow_speed_rate rate]
+cmd:test_tank     desc:test[test_tank gx, gz]
+cmd:upgrade_outgate     desc:外城门升级[upgrade_outgate]
+cmd:zhulu_pass_stage     desc:test[zhulu_pass_stage
+cmd:zhulu_show_stage     desc:test[zhulu_show_stage
+cmd:add_hurt     desc:增加伤兵[add_hurt cnt]
+cmd:full_res_item     desc:增加item类资源[full_res_item]
+cmd:test_zhulu_set_stage     desc:test[test_zhulu_set_stage cmd stageType,day]
+cmd:xwb_test     desc:测试入口
+cmd:add_union_res     desc:增加联盟资源,1food,2wood,3coin[add_union_res moneyType, cnt]
+cmd:test_zhulu_giveup_battle     desc:test[test_zhulu_giveup_battle cmd]
+cmd:clear_pve_cnt     desc:重置塔防pve次数[clear_pve_cnt]
+cmd:acc_mscene_fight     desc:加速主场景战斗[acc_mscene_fight]
+cmd:gen_area_event     desc:生成陈情事件[gen_area_event eventType]
+cmd:fenghua_set_score     desc:设置风华值
+cmd:print_cham_auc_info     desc:打印联盟拍卖的冠军服道具拍卖信息
+cmd:refresh_resgrd_def     desc:外城资源地守军刷新[gx,gz,战斗类型（1是扫荡，2是抢占）,指定配置表中阵容]
+cmd:test_zhulu_battle_result     desc:test[test_zhulu_battle_result cmd]
+cmd:wiz_printPolicyAddRate     desc:打印内政加成
+cmd:test_zhulu_all_npc_confirm     desc:test[test_zhulu_all_npc_confirm cmd]
+cmd:test_zhulu_req_match     desc:test[test_zhulu_req_match cmd]
+cmd:set_rwd_pool_ver     desc:设置奖池版本号[set_rwd_pool_ver poolKey,rwdPoolIdx,ver]
+cmd:start_act     desc:开启活动[start_act actId, afterSec, runSec]
+cmd:set_support_info     desc:设置民心值
+cmd:gb_maxhp     desc:神兽满血 gb_maxhp gbType
+cmd:set_union_tech     desc:设置联盟科技[set_union_tech techId,lev]
+cmd:water_caution_fight     desc:水上警戒战斗测试[water_caution_fight 兵种(0随机,1步,2弓,4骑,缺省4)]
+cmd:finish_city_act     desc:快速完成众志摧城活动
+cmd:wiz_mydoor_change_tag     desc:切换奇门每轮奖励
+cmd:set_move_speed     desc:急行军[set_move_speed speed]
+cmd:championSrv_settle     desc:冠军服下一天结束评定[championSrv_settle]
+cmd:full_spweapon     desc:所有武将装备满配[full_spweapon maxSpLev(专武等级)]
+cmd:championSrv_switch     desc:无视TimeBegin限制开启/关闭冠军服[championSrv_switch isVisible]
+cmd:sub_union_res     desc:减少联盟资源,1food,2wood,3coin[sub_union_res moneyType, cnt]
+cmd:super_gb     desc:神兽满级 super_gb gbType
+cmd:test_add_friend     desc:test[test_add_friend, cmd, cnt]
+cmd:create_td     desc:造塔[create_td slotIdx, tType]
+cmd:add_official_exp     desc:添加官员勋绩
+cmd:wiz_set_acc_type     desc:指令修改accType
+cmd:set_nb_chapter     desc:跳转章节[set_nb_chapter chapterId]
+cmd:show_caution_round     desc:打印警戒范围[show_caution_round eid]
+cmd:fix_discuss_time     desc:更改九州议事开启时间[fix_discuss_time 1] (天)
+cmd:act_occcity     desc:触发攻打城池事件（活动）[act_occcity cityType]
+cmd:mulpt_war_wiz     desc:多点争夺指令
+cmd:add_adorn     desc:一键添加装扮[add_adorn needItem]
+cmd:show_pool_rate     desc:打印赛季池权重 show_pool_rate poolIdx,rewardIdx
+cmd:full_area_birth     desc:将一个州落满
+cmd:add_time     desc:增加时间[add_time hour,min,sec,backTag(log时间) ]
+cmd:add_Act1084_point     desc:增加答题次数
+cmd:occ_res_grd     desc:占领资源地[occ_res_grd gx,gz]
+cmd:add_gongming_score     desc:增加功名积分
+cmd:add_organize_rank     desc:新增消消乐排行榜[add_organize_rank cnt,time]
+cmd:pass_tdpve     desc:直接通关塔防pve[pass_tdpve stage, level]
+cmd:done_union_bra     desc:完成联盟征程支线[done_union_bra taskType]
+cmd:set_fenghua_rank_info     desc:设置风华榜刷新间隔以及上榜上限
+cmd:finsh_achieve     desc:完成个人成就[finsh_achieve taskType(不填完成所有)]
+cmd:season_pool_log_userrate     desc:设置招募卡池概率日志显示/关闭
+cmd:set_fighthard_point     desc:设置酣斗积分[set_fighthard_point point]
+cmd:set_season_task_pro     desc:设置个人结算6种任务进度
+cmd:fill_uteam     desc:填满联盟部曲委托测试数据[fill_uteam 成员数,分组数,兵种]
+cmd:show_team_agent_stats     desc:打印赛季委托统计数据
+cmd:weather_cmd     desc:weather_cmd 1/2/3
+cmd:reset_gongming_daily     desc:重置功名每日获取积分
+cmd:full_skill_debris     desc:获取所有技能碎片
+cmd:set_open_srv     desc:设置开服时间[set_open_srv]
+cmd:test_big_fightrec     desc:造战报测试数据
+cmd:do_user_settle_log     desc:输出玩家赛季结算日志
+cmd:add_pool_free_sign_cnt     desc:增加赛季卡池免费数[add_pool_free_sign_cnt signId,cnt]
+cmd:kick_self     desc:杀掉自己连接[kick_self]
+cmd:unlock_innerrg     desc:内城资源地解锁 unlock_innerrg posId, resType
+cmd:print_account     desc:打印账号[print_account userId]
+cmd:light_job_node     desc:点亮职业技能 nodeId(不填则点亮全部)
+cmd:add_spweapon     desc:装备满配[add_spweapon heroType, maxSpLev(专武等级)]
+cmd:up_build     desc:建筑升级（建筑id，等级）[up_build buildID,level]
+cmd:create_random_gem     desc:新增指定类型宝石[create_random_gem quality(1,2,3,4),数量,是否有技能(可选, 1为有技能), 红宝石是否技能(q=4生效, 1为有技能)]
+cmd:clear_gem_stone     desc:清空指定类型宝石[clear_gem_stone quality(1,2,3,4)]
+cmd:test_luoyang_rank     desc:测试洛阳排行[test_luoyang_rank occTime]
+cmd:super_hero     desc:满级武将[super_hero]
+cmd:add_top_cnt     desc:增加洛阳问鼎次数[add_top_cnt cnt]
+cmd:role_trading     desc:绑定新账号[role_trading uid,newAcc]
+cmd:role_freeze     desc:冻结用户[role_freeze uid,1/0]
+cmd:rally_delay_end     desc:[延迟集结战斗结束[rally_delay_end 1/0]]
+cmd:fly_area     desc:全联盟主城打飞[fly_area]
+cmd:unlock_awaked_skill     desc:武将解锁觉醒技[unlock_awaked_skill heroType(不填则全武将解锁)]
+cmd:test_fly_city_area     desc:测试城池击飞[test_fly_city_area]
+cmd:test_stele_msg     desc:测试广播[test_stele_msg eid msgType]
+cmd:ctrl_holy_stele     desc:快速控制圣碑[ctrl_holy_stele idx]
+cmd:sst_cmd     desc:模拟日常[auto_play]
+cmd:show_att_range     desc:打印射程[show_att_range eid]
+cmd:create_gem_stone     desc:创建宝石[create_gem_stone quality(1,2,3,4),attrIdx1(词条),val1(数值),attrIdx2,val2,skillIdx(可选),val3]
+cmd:destroy_gwall     desc:摧毁城池城墙[destroy_cwall gateType]
+cmd:set_weapons_skill_lev     desc:一键升级专武技能[set_weapons_skill_lev lev]
+cmd:unlock_exclusive_weapons     desc:一键激活专武[unlock_exclusive_weapons]
+cmd:add_all_weapon_grade     desc:一键升级武器[add_all_weapon_grade lev]
+cmd:add_1024_sign     desc:新增签到活动天数[add_1024_sign cnt(从当天加多少天)]
+cmd:create_union     desc:创建联盟[create_union memcnt]
+cmd:sub_flag_wall     desc:联盟军旗降低耐久 sub_flag_wall eid, subVal
+cmd:hot_area_add_fight     desc:加战役区域点位[hot_area_add_fight gx, gz]
+cmd:set_bandit_checkpoint     desc:白波跳关[set_bandit_checkpoint id]
+cmd:occ_gate     desc:占领关隘[occ_gate gateType]
+cmd:wiz_set_treat_time     desc:设置治疗周期[wiz_set_treat_time time]
+cmd:full_weapon_item     desc:获取所有武器打造材料
+cmd:set_bandit_rwdcnt     desc:设置白波奖励次数[set_bandit_rwdcnt cnt]
+cmd:set_share_lev     desc:设置共鸣等级[set_share_lev lev, exp]
+cmd:save_main_data     desc:主进程存档[save_main_data]
+cmd:set_all_hero_awake_skilllev     desc:设置所有武将觉醒技能等级[set_all_hero_awake_skilllev, lev]
+cmd:add_recharge_point     desc:增加累充积分[add_recharge_point cnt]
+cmd:show_safe_cnt     desc:show_safe_cnt poolType,rewardType,stage,poolIdx
+cmd:quit_union     desc:退出联盟
+cmd:test_sea_advert_dot     desc:东南亚广告打点测试指令
+cmd:test_hugebow     desc:test[test_crossbow gx, gz]
+cmd:inspect_hero_pool     desc:打印武将卡池信息[inspect_hero_pool poolIdx]
+cmd:test_mass_fight     desc:测试自动打城[test_auto_cbattle castleId]
+cmd:set_nian_monster_state     desc:设置年兽状态
+cmd:add_hrcm_exp     desc:武将举荐加点[add_hrcm_exp heroType, exp]
+cmd:aoe_range     desc:战斗圆形aoe范围坐标[aoe_range fid range]
+cmd:resbp_addp     desc:加福利系统1012类型经验(势起山河)
+cmd:set_car_speed     desc:设置攻城车速度[set_car_speed speed]
+cmd:clear_jewel     desc:清空珠宝[clear_jewel]
+cmd:acc_fight_hour     desc:加速战斗进程时间[acc_fight_hour hour,min,sec,backTag(log时间)]
+cmd:stop_mdoor     desc:关闭奇门遁甲活动[stop_mdoor actId]
+cmd:test_battle     desc:测试战斗[test_battle]
+cmd:start_gift     desc:开启福利[start_gift giftId, afterSec, runSec]
+cmd:marquee_notify     desc:跑马灯[marquee_notify notifyid,herotype/skillType]
+cmd:boss_cmd     desc:boss_cmd 1全盟自动传送打boss
+cmd:change_travel_time     desc:[change_travel_time travelTime,eventTime,eventRate]
+cmd:add_real_gold     desc:增加元宝[add_real_gold cnt]
+cmd:add_steel     desc:[增加百炼钢[add_steel cnt]]
+cmd:test_area_event_rate     desc:测试陈情权重[test_area_event_rate cnt]
+cmd:sub_wood     desc:减少木材[sub_wood cnt]
+cmd:free_all_city     desc:失去城市[free_all_city]
+cmd:naa_set_grade     desc:兵临城下更改难度[naa_set_grade grade]
+cmd:cal_offhexdis     desc:计算两点间直线距离（过关隘为折线）[cal_offhexdis sgx,sgz,tgx,tgz]
+cmd:cal_all_city_flag     desc:cal_all_city_flag maxCityLev, maxLinkCnt
+cmd:show_alliance_score     desc:查看阵营积分
+cmd:add_sarms_item     desc:加兵装道具 add_sarms_item 兵种,坑位,品质
+cmd:allDefWin     desc:进攻方胜利
+cmd:destroy_cwall     desc:摧毁城池城墙[destroy_cwall cityType]
+cmd:get_champion_svr_medal     desc:获取冠军服勋章
+cmd:test     desc:测试入口
+cmd:done_trend_task     desc:完成天下大势任务[done_trend_task taskType]
+cmd:reset_time     desc:重置时间[ reset_time backTag]
+cmd:add_week_rank_score     desc:君临天下增加积分[add_week_rank_score score,tag]
+cmd:end_cboss     desc:结束挑战神兽boss end_cboss result 1/0
+cmd:wiz_rship     desc:改装船相关指令 wiz_rship
+cmd:full_hero_exp     desc:武将满级[full_hero_exp heroType]
+cmd:add_worker     desc:增加村民[add_worker cnt]
+cmd:create_instrument     desc:建造军械[create_instrument index,cnt]
+cmd:rebuild_gwall     desc:恢复城池城墙[destroy_cwall gateType]
+cmd:naa_add_rank     desc:兵临城下增加排行榜[naa_add_rank useTime, score, difficulty]
+cmd:super_test     desc:一键获得测试数据
+cmd:full_build_ig     desc:主城满建筑(不生成部分类型)[full_build_ig eType,...]
+cmd:vip_rank_data     desc:测试入口
+cmd:naa_add_score     desc:兵临城下增加积分[naa_add_score]
+cmd:naa_kill_npc     desc:兵临城下殺死npc[naa_kill_npc]
+cmd:occ_range_resgrd     desc:占领主城范围内的资源地occ_range_resgrd range(默认占领12圈内资源地)
+cmd:next_trend     desc:进入天下大势下一阶段 next_trend
+cmd:et_cmd     desc:护送商队活动指令 et_cmd 0准备盟主数据 1准备玩家数据并聚集(+cnt 自定义联盟人数1-180),skind 2全盟自动跟随 3全盟参与打怪 4通用开始/取消护送 5全盟自动捡箱子 6查询盟友账号(debug.log) 7自动聚集盟友主城
+cmd:add_force     desc:增加部曲[add_force]
+cmd:naa_next_stage     desc:兵临城下开启下一阶段[naa_next_stage]
+cmd:test_same_move     desc:同步器移动记录测试 userId1,userId2,userId3
+cmd:test_find_gemwish_pool     desc:星石祈愿抽卡
+cmd:train_cmd     desc:沙场指令[train_cmd 1/2/3]
+cmd:add_union_mteal     desc:增加联盟积分[add_union_metal cnt]
+cmd:chess_cmd     desc:群雄逐鹿测试[chess_cmd]
+cmd:show_water_city_grid     desc:显示额外水城、关隘格子[show_water_city_grid]
+cmd:brawl_test     desc:百战压测 brawl_test v(1传送 2自动战斗 3状态 0停止 4装扮大金龙)
+cmd:move_force     desc:移动部队[move_force fid,gx,gz]
+cmd:release_city_npc     desc:清除城池npc[release_city_npc cityType]
+cmd:break_nb_freewar     desc:打破新手免战[break_nb_freewar]
+cmd:test_put_stand     desc:测试驻防部队[test_put_stand eid,cnt]
+cmd:set_daily_active     desc:设置日常活跃(清空领取进度)[set_daily_active acitve]
+cmd:xpq_test     desc:测试入口
+cmd:test_birth_cnt     desc:测试出生地数量[test_birth_cnt areaIdx, genCnt]
+cmd:update_file     desc:重新加载lua文件: [update_file file]
+cmd:add_wild_box     desc:增加披沙沥金宝箱[add_wild_box gx, gz, level]
+cmd:rebuild_cwall     desc:恢复城池城墙[destroy_cwall cityType]
+cmd:done_union_ach     desc:完成联盟征程[done_union_ach taskType]
+cmd:done_daily_task     desc:完成每日任务[done_daily_task]
+cmd:set_build_lev     desc:设置建筑等级（建筑id，等级）[set_build_lev buildID,level]
+cmd:job_cmd     desc:职业相关 job_cmd 1,清除被投毒debuf  2,加历练值 exp 3 设置等阶
+cmd:conf_discuss_time     desc:更换九州议事时间[conf_discuss_time]
+cmd:change_discuss_buff     desc:更换九州议事计策[change_discuss_buff buf1 buff2 buff3]
+cmd:sub_wall     desc:扣城防[sub_wall eid,v]
+cmd:done_nbtask     desc:完成当前主线任务[done_nbtask]
+cmd:sub_qzRob_cnt     desc:减少青州次数 sub_qzRob_cnt cnt
+cmd:cal_city_off     desc:计算city偏移量[cal_city_off cityType,gx,gz]
+cmd:set_ap     desc:设置体力[set_ap apCnt]
+cmd:take_all_city     desc:占领城市[take_all_city]
+cmd:add_gold     desc:增加银锭[add_gold cnt]
+cmd:brawl_bp     desc:打印百战累计武勋
+cmd:loss_gate     desc:放弃关隘[loss_gate gateType]
+cmd:set_all_hero_skilllev     desc:设置所有武将技能等级[set_all_hero_skilllev, lev]
+cmd:create_all_build     desc:主城满建筑[full_build]
+cmd:set_hero_skilllev     desc:设置武将技能等级[set_hero_skilllev heroType, skillIdx, lev]
+cmd:full_hero_skilllev     desc:武将技能满级[full_hero_skilllev heroType, skillIdx]
+cmd:add_acc_item     desc:增加加速道具（道具数量必填）[add_acc_item itemType, cnt]
+cmd:full_hero     desc:获得全部武将[full_hero]
+cmd:set_hero_lev     desc:设置武将到指定等级[set_hero_lev level,heroType]
+cmd:add_jewel     desc:加珠宝[add_jewel cnt]
+cmd:dump_dps     desc:打印战力
+cmd:full_build     desc:主城满建筑[full_build]
+cmd:show_time     desc:显示时间[show_time]
+cmd:gembp_addp     desc:加福利系统1012类型经验(势起山河)
+cmd:wiz_npc_fish     desc:一键生成钓鱼图鉴与排行榜数据
+cmd:test_free_draw_mail     desc:测试赛季结算免费抽卡邮件
+cmd:print_force_hrm     desc:打印举荐生效内容[print_force_hrm fid]
+cmd:build_first_flag     desc:建造起始旗子[build_first_flag gx, gz]
+cmd:add_black_att_cnt     desc:添加攻打黑山军次数[add_black_att_cnt cnt]
+cmd:arms_skill     desc:一键开启兵装专属技能 arms_skill
+cmd:set_season     desc:设置季节[set_season season(1,2,3,4)]
+cmd:use_union_strategy     desc:获得联盟计策[use_union_strategy stype]
+cmd:union_help     desc:联盟帮助[union_help]
+cmd:super     desc:一键获得武将、士兵、资源
+cmd:add_all_hero_talent     desc:加所有武将天赋点[add_all_hero_talent lev]
+cmd:allAttWin     desc:进攻方胜利
+cmd:add_item     desc:增加道具（道具数量必填）[add_item itemType, cnt]
+cmd:change_move_speed     desc:急行军[set_move_speed speed]
+cmd:wiz_sim_fish     desc:生成钓鱼全图鉴数据
+cmd:add_job_energy     desc:获得职业精力 add_job_energy energyCnt
+cmd:gb_fight     desc:生成敌方部队自动打神兽 gb_fight gbType, gx, gz, attCnt
+cmd:npc_horce_score     desc:npc自动完成赛马活动
+cmd:result_gatt     desc:关隘自动出兵立即结算 result_gatt
+cmd:gen_fighthard_camp     desc:生成酣斗营地[gen_fighthard_camp gx,gz,confIdx]
+cmd:add_godbeast     desc:获得神兽 add_godbeast gbType
+cmd:colse_set_time     desc:屏蔽加时间[colse_set_time 1]
+cmd:test_fence     desc:建造拒马test_fence gx, gz
+cmd:gb_skillcd     desc:神兽技能cd gb_skillcd cd
+cmd:gatt_addk     desc:关隘自动出兵增加击杀部队数 gatt_addk
+cmd:add_union_auction_item     desc:添加联盟拍卖道具 add_union_auction_item blackMonLev
+cmd:full_hrcm_hero     desc:武将举荐满配[full_hrcm_hero]
+cmd:ljm_test     desc:测试入口
+cmd:full_skill_item     desc:添加全部技能碎片[full_skill_item]
+cmd:change_union_names     desc:修改联盟所有成员名字[change_union_names]

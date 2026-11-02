@@ -1,0 +1,62 @@
+{
+  "commands": [
+    {
+      "name": "加资源",
+      "cmd": "add_food 9999999###add_coin 9999999###add_metal 9999999###add_gold 9999999###add_wood 9999999"
+    },
+    {
+      "name": "武将满阶",
+      "cmd": "set_share_lev 50###set_hero_star###full_hero_skilllevl###set_all_hero_awake_skilllev 6###full_spweapon 6"
+    },
+    {
+      "name": "部曲行军加速",
+      "cmd": "set_move_speed 9000"
+    },
+    {
+      "name": "联盟帮助",
+      "cmd": "union_help"
+    },
+    {
+      "name": "内服福利界面",
+      "cmd": "stop_gift 7"
+    },
+    {
+      "name": "bp活动经验",
+      "cmd": "code GIFT_MGR.getModuleByGiftType(1012).wizTest(\"玩家id\",要加的经验值)"
+    },
+    {
+      "name": "星石宝箱",
+      "cmd": "add_item 18001,40"
+    },
+    {
+      "name": "重开活动",
+      "cmd": "stop_act 81###start_act 81"
+    },
+    {
+      "name": "战斗压测",
+      "cmd": "code TEST_CAUTION.doTest()"
+    },
+    {
+      "name": "联盟史册",
+      "cmd": "get_union_his_item",
+      "desc": "有联盟后使用"
+    },
+    {
+      "name": "加势力点",
+      "cmd": "power_cmd 2,5"
+    },
+    {
+      "name": "部曲装备船",
+      "cmd": "wiz_rship 6,1,1001"
+    },
+    {
+      "name": "造船活动",
+      "cmd": "add_item 3393,5###add_item 3394,5###add_item 3395,5###add_item 3396,5###add_item 3397,5###add_item 3398,5###add_item 3399,5###add_item 3400,5###add_item 3401,5###add_item 3402,5###add_item 3403,5###add_item 3404,5###add_item 3405,5###add_item 3406,5###add_item 3407,5",
+      "desc": "所有材料"
+    },
+    {
+      "name": "请求服务器档位",
+      "cmd": "client:for_caller.s_req_server_stage()"
+    }
+  ]
+}

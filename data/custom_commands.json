@@ -1,3 +1,10 @@
 {
-  "commands": []
+  "commands": [
+    {
+      "name": "清理",
+      "op": "cleanup.sh",
+      "need_param": false,
+      "check_proc": false
+    }
+  ]
 }

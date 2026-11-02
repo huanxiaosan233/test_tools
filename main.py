@@ -19,8 +19,8 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import requests
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QTextCharFormat, QTextCursor
+from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QIcon, QImage, QPainter, QTextCharFormat, QTextCursor, QTextOption
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -44,10 +44,14 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTabWidget,
     QTextBrowser,
+    QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
+
+from config_search import ConfigSearchPage
+from gm_commands import GmCommandPage
 
 # 服务器机器 -> 指令接口前缀
 MACHINE_PREFIX = {
@@ -63,12 +67,14 @@ COMMANDS = [
     {"key": "restart", "label": "重启", "op": "restart.sh", "check_proc": True},
     {"key": "drop", "label": "清档", "op": "drop.sh", "check_proc": False},
     {"key": "proc", "label": "显示进程状态", "op": "proc.sh", "check_proc": False},
-    {"key": "revert", "label": "服务器还原", "op": "revert.sh", "check_proc": False},
+    {"key": "viewlog", "label": "查看日志", "op": "log.sh", "check_proc": False,
+     "dialog": "view_log"},
     {"key": "swseason", "label": "切换赛季", "op": "swSeason.sh", "check_proc": True, "param": "season", "param_name": "赛季"},
     {"key": "swgroup", "label": "切换群组", "op": "swSrvGroup.sh", "check_proc": False, "param": "group", "param_name": "群组"},
     {"key": "switchbranch", "label": "切换分支", "op": "switch.sh", "check_proc": True,
      "dialog": "switch_branch", "timeout": None, "cancelable": True},
     {"key": "status", "label": "服务器改动", "op": "status.sh", "check_proc": False, "more": True},
+    {"key": "revert", "label": "服务器还原", "op": "revert.sh", "check_proc": False, "more": True},
     {"key": "swstage", "label": "服务器档位", "op": "swSrvStage.sh", "check_proc": False,
      "param": "stage", "param_name": "档位", "more": True},
     # 本地客户端指令（不走 HTTP）
@@ -369,7 +375,7 @@ def now_str() -> str:
 
 
 def esc(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return text.replace(chr(0x202F), " ")
 
 
 def esc_multiline(text: str) -> str:
@@ -389,10 +395,11 @@ class RequestWorker(QThread):
 
     done = Signal(bool, object, str, float)  # 是否成功, HTTP 状态码(异常时 None), 响应内容, 耗时
 
-    def __init__(self, url, timeout):
+    def __init__(self, url, timeout, truncate=True):
         super().__init__()
         self._url = url
         self._timeout = timeout
+        self._truncate = truncate
 
     def run(self):
         start = time.monotonic()
@@ -400,17 +407,17 @@ class RequestWorker(QThread):
             resp = requests.get(self._url, timeout=self._timeout)
             elapsed = time.monotonic() - start
             ok = 200 <= resp.status_code < 300
-            self.done.emit(ok, resp.status_code, self._body(resp), elapsed)
+            self.done.emit(ok, resp.status_code, self._body(resp, self._truncate), elapsed)
         except Exception as exc:  # 网络异常 / 超时
             self.done.emit(False, None, str(exc), time.monotonic() - start)
 
     @staticmethod
-    def _body(resp) -> str:
+    def _body(resp, truncate=True) -> str:
         encoding = resp.encoding
         if not encoding or encoding.lower() in ("iso-8859-1", "ascii"):
             resp.encoding = resp.apparent_encoding or "utf-8"
         text = clean_body(resp.text.strip())
-        if len(text) > MAX_BODY_STORE:
+        if truncate and len(text) > MAX_BODY_STORE:
             text = text[:MAX_BODY_STORE] + "\n……（内容过长，已截断）"
         return text
 
@@ -749,6 +756,367 @@ class ResponseDialog(QDialog):
         QApplication.clipboard().setText(self._text)
 
 
+class ViewLogDialog(QDialog):
+    """查看日志：输入时间（默认今天，格式 YYYY_MM_DD）与日志名（自动补 .log 后缀）。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("查看日志")
+        self.setMinimumWidth(360)
+
+        self.date_edit = QLineEdit(date.today().strftime("%Y_%m_%d"))
+        self.date_edit.setPlaceholderText("时间，例如 2026_10_29")
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("日志名，例如 fight.log 或 fight")
+
+        form = QFormLayout(self)
+        form.addRow("时间", self.date_edit)
+        form.addRow("日志名", self.name_edit)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("确定")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def _on_accept(self):
+        if not self.date_edit.text().strip():
+            QMessageBox.information(self, "提示", "请输入时间")
+            return
+        if not self.name_edit.text().strip():
+            QMessageBox.information(self, "提示", "请输入日志名")
+            return
+        self.accept()
+
+    def values(self):
+        date_str = self.date_edit.text().strip()
+        log_name = self.name_edit.text().strip()
+        if not log_name.lower().endswith(".log"):
+            log_name += ".log"
+        return date_str, log_name
+
+
+def split_log_fields(line):
+    """把一条日志行拆成展示行：时间戳单独一行，其余遇到「,」换行（一个字段一项）。"""
+    line = line.rstrip()
+    parts = []
+    m = re.match(r"^(\[[^\]]*\])\s*(.*)$", line)
+    rest = line
+    if m:
+        parts.append(m.group(1))
+        rest = m.group(2)
+    parts.extend(seg.strip() for seg in rest.split(",") if seg.strip())
+    return parts or [line]
+
+
+# Qt 自动换行只能在「断行机会」处断开；按 Unicode 断行规则，逗号后紧跟字母/数字不算断点
+# （这样 "1,000"、"a,b" 才不会被拆开）。日志正文是「,」分隔的字段、没有空格，
+# 整行唯一的断点就是时间戳里的空格——这就是时间戳总被从中间拆开的原因；
+# 但若只把时间戳空格保护起来，整行又变成零断点，超宽时完全不换行。
+# 因此显示前同时做两步处理：
+#   1. 时间戳 [日期 时间] 里的空格换成窄不换行空格（U+202F），时间戳永远完整；
+#      （不能用 U+00A0，QPlainTextEdit 会把它转成普通空格）
+#   2. 每个逗号后插入零宽空格（U+200B）作为断点，长行在字段边界处折行。
+# 复制 / 搜索 / 行详情时再做逆操作还原为原始文本。
+LOG_ZWSP = "\u200b"
+TS_NNBSP = chr(0x202F)
+TS_SPACE_RE = re.compile(r"\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\]")
+
+
+def prepare_log_text(text):
+    """日志显示前预处理：逗号后加零宽空格断点，时间戳空格换成不换行空格。"""
+    text = text.replace(",", "," + LOG_ZWSP)
+    return TS_SPACE_RE.sub(lambda m: "[" + m.group(1) + TS_NNBSP + m.group(2) + "]", text)
+
+
+def restore_log_text(text):
+    """prepare_log_text 的逆操作：还原零宽空格与不换行空格。"""
+    return text.replace(LOG_ZWSP, "").replace(TS_NNBSP, " ")
+
+
+# 日志查看弹窗「刷新」用的后台请求线程登记表：
+# 刷新期间弹窗可能被关闭，登记可防止运行中的线程对象被回收
+_refresh_workers = []
+
+
+def _cleanup_refresh_worker(worker):
+    """刷新线程结束后从登记表移除并销毁。"""
+    if worker in _refresh_workers:
+        _refresh_workers.remove(worker)
+    worker.deleteLater()
+
+
+class LogViewerDialog(QDialog):
+    """日志查看窗口：显示日志全文，支持关键字搜索（高亮 + 上一个/下一个跳转）与按行筛选。"""
+
+    _MATCH_CAP = 10000  # 高亮匹配数上限，避免超大日志全量高亮卡顿
+
+    def __init__(self, title, text, parent=None, url=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(1280, 720)
+        self._full_text = text
+        self._url = url      # 原始日志请求地址，用于「刷新」重新拉取最新内容
+        self._worker = None  # 进行中的刷新线程
+        self._matches = []      # 当前显示内容中的全部匹配光标
+        self._current_idx = -1  # 当前选中的匹配下标
+        self._capped = False    # 匹配数是否达到高亮上限
+
+        layout = QVBoxLayout(self)
+
+        # 搜索行：高亮所有匹配并支持跳转
+        search_row = QHBoxLayout()
+        search_row.addWidget(QLabel("搜索："))
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("输入关键字，回车查找下一个")
+        self._search_edit.textChanged.connect(self._highlight_matches)
+        self._search_edit.returnPressed.connect(self.find_next)
+        search_row.addWidget(self._search_edit, 1)
+        prev_btn = QPushButton("上一个")
+        prev_btn.clicked.connect(self.find_prev)
+        next_btn = QPushButton("下一个")
+        next_btn.clicked.connect(self.find_next)
+        search_row.addWidget(prev_btn)
+        search_row.addWidget(next_btn)
+        self._match_label = QLabel("")
+        search_row.addWidget(self._match_label)
+        layout.addLayout(search_row)
+
+        # 筛选行：只显示包含关键字的行
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("筛选："))
+        self._filter_edit = QLineEdit()
+        self._filter_edit.setPlaceholderText("只显示包含关键字的行，回车生效")
+        self._filter_edit.returnPressed.connect(self.apply_filter)
+        filter_row.addWidget(self._filter_edit, 1)
+        filter_btn = QPushButton("筛选")
+        filter_btn.clicked.connect(self.apply_filter)
+        reset_btn = QPushButton("重置")
+        reset_btn.clicked.connect(self.reset_filter)
+        filter_row.addWidget(filter_btn)
+        filter_row.addWidget(reset_btn)
+        self._filter_label = QLabel("")
+        filter_row.addWidget(self._filter_label)
+        layout.addLayout(filter_row)
+
+        self._view = QPlainTextEdit()
+        self._view.setReadOnly(True)
+        # 全局样式表 QWidget{font-size:13px} 会覆盖 setFont 的字号，字号需用样式表指定；
+        # 选中色默认深灰，改为深蓝底白字更醒目
+        self._view.setFont(QFont("Consolas", 12))
+        self._view.setStyleSheet(
+            "font-size: 14px;"
+            "selection-background-color: #1565c0; selection-color: #ffffff;"
+        )
+        # 自动换行：正文逗号后已插入零宽空格作为断点（长行在字段边界处折行），
+        # 时间戳空格已换成不换行空格（不会被拆）；完整内容可双击该行逐字段查看
+        self._view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._view.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self._view.setPlainText(prepare_log_text(text))
+        self._view.viewport().installEventFilter(self)  # 双击某行弹出字段详情
+        layout.addWidget(self._view, 1)
+
+        # 底部一行：左侧双击提示，右侧「刷新 / 复制全部 / 关闭」
+        hint = QLabel("提示：双击任意一行日志，可打开整条日志详情（时间戳与各字段逐行展示）")
+        hint.setStyleSheet("color:#999; font-size:12px;")
+        row = QHBoxLayout()
+        row.addWidget(hint)
+        row.addStretch(1)
+        self._refresh_btn = QPushButton("刷新")
+        self._refresh_btn.clicked.connect(self._refresh_log)
+        copy_btn = QPushButton("复制全部")
+        copy_btn.clicked.connect(
+            lambda: QApplication.clipboard().setText(restore_log_text(self._view.toPlainText())))
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(self.accept)
+        row.addWidget(self._refresh_btn)
+        row.addWidget(copy_btn)
+        row.addWidget(close_btn)
+        layout.addLayout(row)
+
+    # ---------- 搜索 ----------
+    def _highlight_matches(self):
+        """收集当前显示内容中的全部搜索匹配，刷新高亮与计数显示。"""
+        keyword = self._search_edit.text()
+        self._matches = []
+        self._capped = False
+        if keyword:
+            # 显示文本含零宽空格（逗号后断点）与不换行空格（时间戳内）：
+            # 查找时去掉前者、把后者当作普通空格，命中后再映射回原文位置
+            raw = self._view.toPlainText()
+            cleaned = []
+            pos_map = []  # cleaned 下标 -> raw 下标
+            for i, ch in enumerate(raw):
+                if ch == LOG_ZWSP:
+                    continue
+                cleaned.append(" " if ch == TS_NNBSP else ch)
+                pos_map.append(i)
+            haystack = "".join(cleaned)
+            needle = keyword.replace(LOG_ZWSP, "").replace(TS_NNBSP, " ")
+            start = 0
+            while needle:
+                idx = haystack.find(needle, start)
+                if idx < 0:
+                    break
+                if len(self._matches) >= self._MATCH_CAP:
+                    self._capped = True
+                    break
+                cursor = QTextCursor(self._view.document())
+                cursor.setPosition(pos_map[idx])
+                cursor.setPosition(pos_map[idx + len(needle) - 1] + 1,
+                                   QTextCursor.MoveMode.KeepAnchor)
+                self._matches.append(cursor)
+                start = idx + len(needle)
+        self._current_idx = -1
+        self._apply_match_highlight()
+
+    def _apply_match_highlight(self):
+        """重绘高亮：普通匹配黄色，当前选中匹配橙色；并更新「第 N / 共 M 处」。"""
+        yellow = QTextCharFormat()
+        yellow.setBackground(QColor("#fff59d"))
+        orange = QTextCharFormat()
+        orange.setBackground(QColor("#ff9800"))
+        extras = []
+        for i, cursor in enumerate(self._matches):
+            sel = QTextEdit.ExtraSelection()
+            sel.format = orange if i == self._current_idx else yellow
+            sel.cursor = cursor
+            extras.append(sel)
+        self._view.setExtraSelections(extras)
+
+        if not self._search_edit.text():
+            self._match_label.setText("")
+            return
+        total = "%d+" % len(self._matches) if self._capped else "%d" % len(self._matches)
+        if self._current_idx >= 0:
+            self._match_label.setText("第 %d / %s 处" % (self._current_idx + 1, total))
+        else:
+            self._match_label.setText("共 %s 处" % total)
+
+    def _goto_match(self, idx):
+        """跳转到指定匹配：移动光标、滚到可见位置并刷新高亮。
+
+        不做文本选中——编辑器默认选中色（深灰）会盖住橙色高亮，
+        当前匹配完全由橙色 ExtraSelection 标识。
+        """
+        self._current_idx = idx
+        cursor = QTextCursor(self._matches[idx])
+        cursor.clearSelection()
+        self._view.setTextCursor(cursor)
+        self._view.ensureCursorVisible()
+        self._apply_match_highlight()
+
+    def find_next(self):
+        if not self._matches:
+            return
+        pos = self._view.textCursor().position()
+        # 光标位置（含当前选中的匹配）之后的第一个匹配，超出则回绕到开头
+        idx = 0
+        while idx < len(self._matches) and self._matches[idx].position() <= pos:
+            idx += 1
+        self._goto_match(idx if idx < len(self._matches) else 0)
+
+    def find_prev(self):
+        if not self._matches:
+            return
+        pos = self._view.textCursor().position()
+        # 光标位置（含当前选中的匹配）之前的最后一个匹配，超出则回绕到末尾
+        idx = len(self._matches) - 1
+        while idx >= 0 and self._matches[idx].position() >= pos:
+            idx -= 1
+        self._goto_match(idx if idx >= 0 else len(self._matches) - 1)
+
+    # ---------- 筛选 ----------
+    def apply_filter(self):
+        keyword = self._filter_edit.text()
+        if not keyword:
+            self.reset_filter()
+            return
+        lines = self._full_text.splitlines()
+        matched = [ln for ln in lines if keyword in ln]
+        self._view.setPlainText(prepare_log_text("\n".join(matched)))
+        self._filter_label.setText("%d / %d 行" % (len(matched), len(lines)))
+        self._highlight_matches()
+
+    def reset_filter(self):
+        self._filter_edit.clear()
+        self._view.setPlainText(prepare_log_text(self._full_text))
+        self._filter_label.setText("")
+        self._highlight_matches()
+
+    # ---------- 行详情 ----------
+    def eventFilter(self, obj, event):
+        """双击日志区某行：弹出该行字段详情（一个字段一行），并拦截默认取词选中。"""
+        if obj is self._view.viewport() and event.type() == QEvent.Type.MouseButtonDblClick:
+            cursor = self._view.cursorForPosition(event.position().toPoint())
+            line = cursor.block().text()
+            if line.strip():
+                self._show_line_detail(line)
+                return True
+        return super().eventFilter(obj, event)
+
+    def _show_line_detail(self, line):
+        """弹窗展示一条日志：时间戳与各字段一行一个，超长值在弹窗内自动换行。"""
+        line = restore_log_text(line)  # 详情里还原特殊空格，复制出来不带特殊字符
+        dlg = QDialog(self)
+        dlg.setWindowTitle("日志详情")
+        dlg.resize(640, 560)
+        lay = QVBoxLayout(dlg)
+        view = QPlainTextEdit()
+        view.setReadOnly(True)
+        view.setFont(QFont("Consolas", 12))
+        # 字号与选中色样式需在控件级指定，避免被全局样式表覆盖
+        view.setStyleSheet(
+            "font-size: 14px;"
+            "selection-background-color: #1565c0; selection-color: #ffffff;"
+        )
+        view.setPlainText("\n".join(split_log_fields(line)))
+        lay.addWidget(view, 1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        copy_btn = QPushButton("复制整行")
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(line))
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(dlg.accept)
+        row.addWidget(copy_btn)
+        row.addWidget(close_btn)
+        lay.addLayout(row)
+        dlg.exec()
+
+    # ---------- 刷新 ----------
+    def _refresh_log(self):
+        """重新请求该条日志的最新内容并更新显示。"""
+        if not self._url or self._worker is not None:
+            return
+        self._refresh_btn.setEnabled(False)
+        self._refresh_btn.setText("刷新中…")
+        worker = RequestWorker(self._url, REQUEST_TIMEOUT, truncate=False)
+        _refresh_workers.append(worker)
+        worker.finished.connect(lambda w=worker: _cleanup_refresh_worker(w))
+        self._worker = worker
+        worker.done.connect(self._on_refresh_done)
+        worker.start()
+
+    def _on_refresh_done(self, ok, status, body, elapsed):
+        """刷新完成：成功则替换为最新内容（保留搜索/筛选状态），失败则弹窗提示。"""
+        self._worker = None
+        self._refresh_btn.setEnabled(True)
+        self._refresh_btn.setText("刷新")
+        if not ok:
+            reason = body if status is None else 'HTTP %s' % status
+            QMessageBox.warning(self, "查看日志", "日志刷新失败：%s" % reason)
+            return
+        self._full_text = body
+        if self._filter_edit.text():
+            self.apply_filter()
+        else:
+            self._view.setPlainText(prepare_log_text(body))
+            self._highlight_matches()
+
+
 class MoreCommandsDialog(QDialog):
     """「更多」指令弹窗：按钮排布与外层服务器指令区一致（每行 3 个，可带数字输入框）。
 
@@ -929,7 +1297,7 @@ class MainWindow(QWidget):
             icon_path = app_dir() / "图标.ico"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
-        self.resize(1096, 720)
+        self.resize(1120, 740)
 
         self.servers = load_servers()
         self._custom_cmd_defs = load_custom_cmd_defs()  # 「更多」中新增的自定义指令
@@ -937,6 +1305,8 @@ class MainWindow(QWidget):
         # （selected / multi / multi_selected），页签之间互不同步
         self._flows = []       # 进行中的指令流程（支持多台服务器并发操作）
         self._zombies = []     # 已取消但后台线程尚未结束的请求，结束后自动回收
+        self._log_workers = []  # 查看日志：进行中的日志拉取请求
+        self._log_viewers = []  # 查看日志：已打开的日志查看窗口
         self._running_svn = set()   # 正在执行中的 SVN 更新指令 key（防止重复触发）
         self._bodies = {}      # 「展开响应」：id -> 完整响应内容
         self._body_seq = 0
@@ -974,8 +1344,23 @@ class MainWindow(QWidget):
         # ---- Tab 2：配置替换 ----
         self.tabs.addTab(self._build_replace_tab(), "配置替换")
 
-        # ---- Tab 3：GM 指令（占位，后续扩展） ----
-        self.tabs.addTab(self._build_gm_tab(), "GM 指令")
+        # ---- Tab 3：配置搜索 ----
+        self.config_search_page = ConfigSearchPage(
+            load_settings_fn=load_client_settings,
+            save_settings_fn=save_client_settings,
+        )
+        self.tabs.addTab(self.config_search_page, "配置搜索")
+
+        # ---- Tab 4：GM 指令 ----
+        self.gm_page = GmCommandPage()
+        self.tabs.addTab(self.gm_page, "GM 指令")
+
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+
+    def _on_tab_changed(self, _index):
+        """切到配置搜索页时，若配置目录在其它页签改过就刷新搜索范围列表。"""
+        if self.tabs.currentWidget() is self.config_search_page:
+            self.config_search_page.refresh_if_dir_changed()
 
     def _build_server_section(self):
         """服务器模块：标题 + 添加/多选 + 服务器列表。
@@ -1102,8 +1487,8 @@ class MainWindow(QWidget):
 
         left_widget = QWidget()
         left_widget.setLayout(left)
-        left_widget.setMinimumWidth(480)
-        left_widget.setMaximumWidth(480)
+        left_widget.setMinimumWidth(500)
+        left_widget.setMaximumWidth(500)
         root.addWidget(left_widget)
 
         # 右列：执行日志（独立 QTextBrowser，与服务器指令页签互不影响）
@@ -1926,10 +2311,75 @@ class MainWindow(QWidget):
                "指令 %s" % op)
         )
 
+    # ---------- 查看日志 ----------
+    def _view_logs(self):
+        """查看日志：输入时间与日志名，按选中服务器拉取日志并弹出查看窗口。"""
+        targets = self._target_indexes()
+        if not targets:
+            QMessageBox.information(self, "提示", "请先在上方选中一个服务器")
+            return
+        dlg = ViewLogDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        date_str, log_name = dlg.values()
+
+        for idx in targets:
+            srv = self.servers[idx]
+            if not MACHINE_PREFIX.get(srv["machine"]):
+                QMessageBox.warning(self, "错误", '未知的服务器机器：%s' % srv["machine"])
+                continue
+            url = '%s%s %s %s/%s' % (
+                MACHINE_PREFIX[srv["machine"]], LOG_OP, srv["number"], date_str, log_name,
+            )
+            self._append(
+                '[%s] [%s] 执行「查看日志（%s/%s）」'
+                % (now_str(), esc(srv["name"]), esc(date_str), esc(log_name))
+            )
+            worker = RequestWorker(url, REQUEST_TIMEOUT, truncate=False)
+            self._log_workers.append(worker)
+            worker.done.connect(
+                lambda ok, status, body, elapsed, s=srv, w=worker, u=url:
+                    self._on_log_fetched(s, w, ok, status, body, elapsed, date_str, log_name, u)
+            )
+            worker.start()
+
+    def _on_log_fetched(self, srv, worker, ok, status, body, elapsed, date_str, log_name, url):
+        """日志拉取完成：成功则弹出日志查看窗口，失败则输出红色日志并弹窗提示。"""
+        if worker in self._log_workers:
+            self._log_workers.remove(worker)
+        worker.deleteLater()
+        if not ok:
+            reason = body if status is None else 'HTTP %s' % status
+            self._append(
+                '[%s] [%s] <span style="color:#c62828">查看日志失败：%s</span>'
+                % (now_str(), esc(srv["name"]), esc(reason))
+            )
+            QMessageBox.warning(self, "查看日志", '「%s」日志拉取失败：%s' % (srv["name"], reason))
+            return
+        self._append(
+            '[%s] [%s] 日志拉取成功（%.1f 秒），共 %d 行'
+            % (now_str(), esc(srv["name"]), elapsed, len(body.splitlines()))
+        )
+        # 不传父窗口：日志窗口是独立顶层窗口，可移到主窗口后面、单独在任务栏切换
+        viewer = LogViewerDialog(
+            '查看日志 - %s / %s/%s' % (srv["name"], date_str, log_name), body, url=url,
+        )
+        self._log_viewers.append(viewer)
+        viewer.finished.connect(lambda _=0, v=viewer: self._on_viewer_closed(v))
+        viewer.show()
+
+    def _on_viewer_closed(self, viewer):
+        if viewer in self._log_viewers:
+            self._log_viewers.remove(viewer)
+        viewer.deleteLater()
+
     # ---------- 执行指令 ----------
     def _on_run(self, cmd, param_override=None):
         if cmd.get("mode") == "local":
             self._run_local(cmd)
+            return
+        if cmd.get("dialog") == "view_log":
+            self._view_logs()
             return
 
         targets = self._target_indexes()
