@@ -6,9 +6,24 @@
       "machine": "243"
     },
     {
+      "name": "策划1",
+      "number": "1001",
+      "machine": "243"
+    },
+    {
+      "name": "策划2",
+      "number": "1002",
+      "machine": "241"
+    },
+    {
       "name": "策划3",
       "number": "1018",
       "machine": "241"
+    },
+    {
+      "name": "美术服",
+      "number": "1005",
+      "machine": "243"
     },
     {
       "name": "结算1",
@@ -54,21 +69,6 @@
       "name": "中转服",
       "number": "102",
       "machine": "241"
-    },
-    {
-      "name": "策划2",
-      "number": "1002",
-      "machine": "241"
-    },
-    {
-      "name": "美术服",
-      "number": "1005",
-      "machine": "243"
-    },
-    {
-      "name": "策划1",
-      "number": "1001",
-      "machine": "243"
     }
   ]
 }

@@ -4,6 +4,7 @@
       "name": "清理",
       "op": "cleanup.sh",
       "need_param": false,
+      "need_text": false,
       "check_proc": false
     }
   ]

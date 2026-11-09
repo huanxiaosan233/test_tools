@@ -1,0 +1,19 @@
+{
+  "host": "192.168.32.132",
+  "port": 9301,
+  "history": [
+    "super",
+    "for_caller.s_req_server_stage()",
+    "client:for_caller.s_req_server_stage()",
+    "for_caller.s_req_union_list()",
+    "DATA_CENTER.getUserId()",
+    "client:click(\"MAIN_UI/btnWizard\")",
+    "client:d.click(\"MAIN_UI/btnWizard\")",
+    "client:PHONE_BACK.backFunc()",
+    "PHONE_BACK.backFunc()",
+    "d.click(\"MAIN_UI/btnFriend\")",
+    "client:UI_Login.OnClick()"
+  ],
+  "mode": "auto",
+  "client_exe": "E:\\y11_designer\\game\\game.exe"
+}

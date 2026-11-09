@@ -1,0 +1,11 @@
+{
+  "commands": {
+    "proc": false,
+    "viewlog": false,
+    "status": false,
+    "openclient": false,
+    "openbranch": false,
+    "openbranch_last": false,
+    "clientcompile": false
+  }
+}

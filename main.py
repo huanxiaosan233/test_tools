@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QSystemTrayIcon,
     QTabWidget,
     QTextBrowser,
     QTextEdit,
@@ -78,14 +79,16 @@ COMMANDS = [
     {"key": "revert", "label": "服务器还原", "op": "revert.sh", "check_proc": False, "more": True},
     {"key": "swstage", "label": "服务器档位", "op": "swSrvStage.sh", "check_proc": False,
      "param": "stage", "param_name": "档位", "more": True},
+    {"key": "swtrial", "label": "试玩服标记", "op": "swSrvTrial.sh", "check_proc": False,
+     "dialog": "trial", "more": True},
     # 本地客户端指令（不走 HTTP）
-    {"key": "clientcompile", "label": "客户端编译", "mode": "local", "no_config": True},
     {"key": "openclient", "label": "打开主干", "mode": "local"},
-    {"key": "svnupdate", "label": "更新主干", "mode": "local", "svn": True},
     {"key": "openbranch", "label": "打开本周分支", "mode": "local"},
-    {"key": "svnupdatebranch", "label": "更新本周分支", "mode": "local", "svn": True},
     {"key": "openbranch_last", "label": "打开上周分支", "mode": "local"},
+    {"key": "svnupdate", "label": "更新主干", "mode": "local", "svn": True},
+    {"key": "svnupdatebranch", "label": "更新本周分支", "mode": "local", "svn": True},
     {"key": "svnupdatebranch_last", "label": "更新上周分支", "mode": "local", "svn": True},
+    {"key": "clientcompile", "label": "客户端编译", "mode": "local", "no_config": True},
 ]
 
 # 「切换群组」右键「查看群组」弹窗中展示的群组对照表
@@ -167,6 +170,8 @@ def build_upload_file_path(local_path, srv):
     sub = autocode_relative_path(local_path)
     if sub is None:
         return None, "文件路径必须位于 autocode 目录下，当前为：%s" % local_path
+    # 服务端是 Linux，路径统一使用正斜杠
+    sub = sub.replace("\\", "/")
     prefix = UPLOAD_PATH_PREFIX[srv["machine"]]
     tail = UPLOAD_PATH_TAIL % (srv["number"], sub)
     return prefix + tail, None
@@ -205,6 +210,7 @@ ERROR_TIME_RE = re.compile(r"\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]tracebac
 BRANCH_KEYWORD = "y11_server_branch"
 BRANCH_RE = re.compile(r"y11_server_branch[/\\]+([^\s'\"]+)")
 SEASON_ARG_RE = re.compile(r"(?<![\w-])-s\s*(\d+)")
+PROC_COUNT_RE = re.compile(r"(\d+)\s*个进程已启动")
 
 REQUEST_TIMEOUT = 180  # 等待服务器响应的超时时间（秒）；切换分支不受此限制（timeout=None）
 INLINE_BODY_LIMIT = 200  # 日志中直接内联展示的响应长度上限，超出则折叠为「展开响应」链接
@@ -240,7 +246,7 @@ QPushButton:checked {
 APP_QSS = """
 QWidget { font-size: 13px; font-family: "Microsoft YaHei", "Segoe UI", sans-serif; }
 QLabel#sectionTitle { font-weight: bold; color: #1f2329; padding: 2px 0; }
-QPushButton { padding: 6px 12px; border: 1px solid #c9ced6; border-radius: 6px; background: #f7f8fa; }
+QPushButton { padding: 6px 12px; border: 1px solid #c9ced6; border-radius: 6px; background: #f7f8fa; outline: none; }
 QPushButton:hover { background: #eef2f7; }
 QPushButton:disabled { color: #a0a4ab; background: #f0f1f3; }
 QPlainTextEdit {
@@ -269,6 +275,8 @@ DATA_DIR = data_dir()
 DATA_FILE = DATA_DIR / "servers.json"
 CLIENT_SETTINGS_FILE = DATA_DIR / "client_settings.json"
 CUSTOM_COMMANDS_FILE = DATA_DIR / "custom_commands.json"
+PROC_SETTINGS_FILE = DATA_DIR / "proc_settings.json"
+NOTIFY_SETTINGS_FILE = DATA_DIR / "notify_settings.json"
 
 
 def _migrate_old_file(new_path: Path) -> None:
@@ -312,7 +320,8 @@ def save_servers(servers):
 def load_custom_cmd_defs():
     """加载自定义指令定义（「更多」中右键新增的指令）。
 
-    每项格式：{"op": 指令, "need_param": 是否需要数字框, "check_proc": 是否执行后检查进程}
+    每项格式：{"op": 指令, "need_param": 是否需要数字框, "need_text": 是否需要文本框,
+              "check_proc": 是否执行后检查进程}
     """
     _migrate_old_file(CUSTOM_COMMANDS_FILE)
     if not CUSTOM_COMMANDS_FILE.exists():
@@ -331,6 +340,7 @@ def load_custom_cmd_defs():
             "name": name,
             "op": op,
             "need_param": bool(item.get("need_param")),
+            "need_text": bool(item.get("need_text")),
             "check_proc": bool(item.get("check_proc")),
         })
     return result
@@ -371,6 +381,55 @@ def load_client_settings():
 
 def save_client_settings(settings):
     CLIENT_SETTINGS_FILE.write_text(
+        json.dumps(settings, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def load_proc_settings():
+    """加载「检查进程设置」。
+
+    配置项：
+      - show_proc_count: 进程状态输出时是否附带「进程数：N」
+    """
+    _migrate_old_file(PROC_SETTINGS_FILE)
+    if not PROC_SETTINGS_FILE.exists():
+        return {"show_proc_count": True}
+    try:
+        data = json.loads(PROC_SETTINGS_FILE.read_text(encoding="utf-8"))
+        return {"show_proc_count": bool(data.get("show_proc_count", True))}
+    except Exception:
+        return {"show_proc_count": True}
+
+
+def save_proc_settings(settings):
+    PROC_SETTINGS_FILE.write_text(
+        json.dumps(settings, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def load_notify_settings():
+    """加载「执行完成通知」配置。
+
+    配置项：
+      - commands: {指令key: 是否通知}，未记录的指令默认开启通知
+    """
+    _migrate_old_file(NOTIFY_SETTINGS_FILE)
+    if not NOTIFY_SETTINGS_FILE.exists():
+        return {"commands": {}}
+    try:
+        data = json.loads(NOTIFY_SETTINGS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {"commands": {}}
+    commands = data.get("commands")
+    if not isinstance(commands, dict):
+        commands = {}
+    return {"commands": {str(k): bool(v) for k, v in commands.items()}}
+
+
+def save_notify_settings(settings):
+    NOTIFY_SETTINGS_FILE.write_text(
         json.dumps(settings, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
@@ -459,6 +518,63 @@ class MonitorPoller(QThread):
             return mkey, False, "", str(exc)
 
 
+def _decode_svn_output(data):
+    """svn.exe 在中文 Windows 上按 GBK 输出，先试 utf-8，再退回 gbk。"""
+    if not data:
+        return ""
+    for enc in ("utf-8", "gbk"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", "replace")
+
+
+SVN_STATUS_TEXT = {
+    "U": "更新", "A": "新增", "D": "删除", "G": "合并",
+    "C": "冲突", "E": "存在", "R": "替换",
+}
+
+
+def _parse_svn_update(stdout):
+    """解析 svn update 输出，返回 (状态码计数, 冲突行)。
+
+    状态行为「4 列状态码 + 空格 + 路径」，C 出现在第 1/2 列为文本/属性冲突，
+    第 4 列为树冲突：
+        C    a.txt
+         C   a.txt
+           C a.txt
+    不能先 strip 再判断，否则列位置会丢，树冲突会被漏掉。
+    """
+    counts = {}
+    conflicts = []
+    for line in (stdout or "").splitlines():
+        if len(line) <= 5 or line[4] != " ":
+            continue
+        status = line[:4]
+        if status.strip(" ADUGCERB"):
+            continue
+        if "C" in status:
+            conflicts.append(line.strip())
+            continue
+        code = status.strip()[:1]
+        if code:
+            counts[code] = counts.get(code, 0) + 1
+    return counts, conflicts
+
+
+def _format_svn_summary(counts, stdout, elapsed):
+    """生成「（合并 5，更新 114，r398941，用时 1.7 秒）」形式的更新摘要。"""
+    parts = ["%s %d" % (SVN_STATUS_TEXT.get(k, k), v) for k, v in sorted(counts.items())]
+    if not parts:
+        parts.append("已是最新版本")
+    rev = re.search(r"(?:Updated to|At) revision (\d+)", stdout or "")
+    if rev:
+        parts.append("r%s" % rev.group(1))
+    parts.append("用时 %.1f 秒" % elapsed)
+    return "（%s）" % "，".join(parts)
+
+
 class _SVNWorker(QThread):
     """后台执行 svn update，完成后通过信号把结果送回 UI 线程。"""
 
@@ -470,15 +586,24 @@ class _SVNWorker(QThread):
 
     def run(self):
         try:
+            # 冲突不交互提问：否则 svn 会把 stdin 当终端，停在 Select: (p) postpone…
+            # 一直等输入，导致更新其实已完成却一直卡到 10 分钟超时
             result = subprocess.run(
-                ["svn", "update"],
+                ["svn", "update", "--non-interactive", "--accept", "postpone"],
                 cwd=self._svn_dir,
-                capture_output=True, text=True, encoding="utf-8",
+                capture_output=True, stdin=subprocess.DEVNULL,
                 timeout=600,
             )
-            self.done.emit(True, result.returncode, result.stdout, result.stderr, "")
+            self.done.emit(
+                True, result.returncode,
+                _decode_svn_output(result.stdout), _decode_svn_output(result.stderr),
+                "",
+            )
         except subprocess.TimeoutExpired:
-            self.done.emit(False, -1, "", "", "svn update 超时（10 分钟）")
+            self.done.emit(
+                False, -1, "", "",
+                "svn update 超时（10 分钟）；本次更新已被中断，工作副本若提示锁定请执行 svn cleanup",
+            )
         except FileNotFoundError:
             self.done.emit(False, -1, "", "", "未找到 svn 命令，请确认已安装并加入 PATH")
         except Exception as exc:
@@ -673,6 +798,45 @@ class SwitchBranchDialog(QDialog):
 
     def values(self):
         return self.branch_box.currentText(), str(self.season_spin.value())
+
+
+class TrialFlagDialog(QDialog):
+    """试玩服标记：选择「开启」或「关闭」，分别对应 true / false。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("试玩服标记")
+        self.setMinimumWidth(280)
+        self._value = None  # "true" / "false"
+
+        layout = QVBoxLayout(self)
+        tip = QLabel("请选择要发送的标记：")
+        layout.addWidget(tip)
+
+        row = QHBoxLayout()
+        on_btn = QPushButton("开启")
+        on_btn.setMinimumHeight(40)
+        on_btn.clicked.connect(lambda: self._choose("true"))
+        off_btn = QPushButton("关闭")
+        off_btn.setMinimumHeight(40)
+        off_btn.clicked.connect(lambda: self._choose("false"))
+        row.addWidget(on_btn, 1)
+        row.addWidget(off_btn, 1)
+        layout.addLayout(row)
+
+        cancel_row = QHBoxLayout()
+        cancel_row.addStretch(1)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        cancel_row.addWidget(cancel_btn)
+        layout.addLayout(cancel_row)
+
+    def _choose(self, value):
+        self._value = value
+        self.accept()
+
+    def value(self):
+        return self._value
 
 
 class MonitorErrorDialog(QDialog):
@@ -1141,18 +1305,21 @@ class MoreCommandsDialog(QDialog):
     """
 
     def __init__(self, more_cmds, add_callback=None, edit_callback=None,
-                 delete_callback=None, parent=None):
+                 delete_callback=None, notify_menu_cb=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("更多指令")
         self.setModal(True)
         self.setMinimumWidth(460)
         self.chosen = None
         self.param_value = None
+        self.text_value = None
         self.param_widgets = {}  # cmd_key -> QSpinBox
+        self.text_widgets = {}  # cmd_key -> QLineEdit
         self._more_cmds = list(more_cmds)
         self._add_callback = add_callback
         self._edit_callback = edit_callback
         self._delete_callback = delete_callback
+        self._notify_menu_cb = notify_menu_cb
 
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
@@ -1176,6 +1343,7 @@ class MoreCommandsDialog(QDialog):
     def _rebuild(self):
         """根据 self._more_cmds 重建按钮网格。"""
         self.param_widgets = {}
+        self.text_widgets = {}
         while self._grid.count():
             item = self._grid.takeAt(0)
             w = item.widget()
@@ -1203,10 +1371,20 @@ class MoreCommandsDialog(QDialog):
                 spin.setToolTip("输入要切换到的%s数字" % cmd.get("param_name", "参数"))
                 cell_layout.addWidget(spin)
                 self.param_widgets[cmd["key"]] = spin
+            if cmd.get("text"):
+                edit = QLineEdit()
+                edit.setMinimumHeight(40)
+                edit.setPlaceholderText("输入内容")
+                edit.setToolTip("输入的内容会跟在服务器编号后面发给服务器")
+                cell_layout.addWidget(edit, 1)
+                self.text_widgets[cmd["key"]] = edit
 
-            # 自定义指令：右键编辑 / 删除
+            # 右键：自定义指令可编辑 / 删除；所有指令都可开关执行完成通知
             if cmd.get("custom"):
-                btn.setToolTip("右键：编辑 / 删除")
+                btn.setToolTip("右键：编辑 / 删除 / 执行完成通知")
+            elif self._notify_menu_cb:
+                btn.setToolTip("右键：执行完成通知")
+            if cmd.get("custom") or self._notify_menu_cb:
                 btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
                 btn.customContextMenuRequested.connect(
                     lambda pos, c=cmd, b=btn: self._on_cmd_context_menu(pos, c, b)
@@ -1227,15 +1405,21 @@ class MoreCommandsDialog(QDialog):
 
     def _on_cmd_context_menu(self, pos, cmd, btn):
         menu = QMenu(self)
-        edit_act = menu.addAction("编辑")
-        del_act = menu.addAction("删除")
+        edit_act = del_act = None
+        if cmd.get("custom"):
+            edit_act = menu.addAction("编辑")
+            del_act = menu.addAction("删除")
+        if self._notify_menu_cb:
+            self._notify_menu_cb(menu, cmd)
+        if not menu.actions():
+            return
         chosen = menu.exec(btn.mapToGlobal(pos))
-        if chosen == edit_act and self._edit_callback:
+        if edit_act is not None and chosen == edit_act and self._edit_callback:
             new_list = self._edit_callback(cmd["key"])
             if new_list is not None:
                 self._more_cmds = list(new_list)
                 self._rebuild()
-        elif chosen == del_act and self._delete_callback:
+        elif del_act is not None and chosen == del_act and self._delete_callback:
             new_list = self._delete_callback(cmd["key"])
             if new_list is not None:
                 self._more_cmds = list(new_list)
@@ -1246,11 +1430,13 @@ class MoreCommandsDialog(QDialog):
         self.chosen = cmd
         spin = self.param_widgets.get(cmd["key"])
         self.param_value = str(spin.value()) if spin is not None else None
+        edit = self.text_widgets.get(cmd["key"])
+        self.text_value = edit.text().strip() if edit is not None else None
         self.accept()
 
 
 class AddCommandDialog(QDialog):
-    """「新增/编辑指令」弹窗：输入名字与指令，并勾选是否需要数字框、是否执行后检查进程。"""
+    """「新增/编辑指令」弹窗：输入名字与指令，并勾选是否需要数字框 / 文本框、是否执行后检查进程。"""
 
     def __init__(self, initial=None, parent=None):
         super().__init__(parent)
@@ -1262,18 +1448,30 @@ class AddCommandDialog(QDialog):
         self.op_edit = QLineEdit()
         self.op_edit.setPlaceholderText("例如 swSrvStage.sh")
         self.param_check = QCheckBox("需要数字框（数字跟在服务器编号后面）")
+        self.text_check = QCheckBox("需要文本框（输入内容跟在服务器编号后面）")
         self.proc_check = QCheckBox("执行后自动检查进程")
 
         if initial:
             self.name_edit.setText(initial.get("name", ""))
             self.op_edit.setText(initial.get("op", ""))
             self.param_check.setChecked(bool(initial.get("need_param")))
+            self.text_check.setChecked(bool(initial.get("need_text")))
             self.proc_check.setChecked(bool(initial.get("check_proc")))
+
+        # 数字框与文本框互斥，不能同时勾选
+        self.param_check.toggled.connect(
+            lambda checked: checked and self.text_check.setChecked(False))
+        self.text_check.toggled.connect(
+            lambda checked: checked and self.param_check.setChecked(False))
+        if self.param_check.isChecked() and self.text_check.isChecked():
+            # 兼容旧配置同时勾选的情况：保留数字框
+            self.text_check.setChecked(False)
 
         form = QFormLayout(self)
         form.addRow("名字：", self.name_edit)
         form.addRow("指令：", self.op_edit)
         form.addRow("", self.param_check)
+        form.addRow("", self.text_check)
         form.addRow("", self.proc_check)
 
         buttons = QDialogButtonBox(
@@ -1300,6 +1498,7 @@ class AddCommandDialog(QDialog):
             self.name_edit.text().strip(),
             self.op_edit.text().strip(),
             self.param_check.isChecked(),
+            self.text_check.isChecked(),
             self.proc_check.isChecked(),
         )
 
@@ -1325,9 +1524,17 @@ class MainWindow(QWidget):
         self._log_workers = []  # 查看日志：进行中的日志拉取请求
         self._log_viewers = []  # 查看日志：已打开的日志查看窗口
         self._running_svn = set()   # 正在执行中的 SVN 更新指令 key（防止重复触发）
+        self._svn_workers = {}      # key -> _SVNWorker，退出时要等线程结束，避免销毁运行中的 QThread
+        self._svn_t0 = {}           # key -> 开始时间，用于统计更新耗时
+        self._svn_labels = {}       # key -> 指令描述，用于执行完成通知
         self._bodies = {}      # 「展开响应」：id -> 完整响应内容
         self._body_seq = 0
         self._monitors = {}    # (id(服务器), 日志key) -> 监控状态，支持多服务器 × 多日志类型并发
+        self._proc_settings = load_proc_settings()  # 检查进程设置（是否打印进程数）
+        self._notify_settings = load_notify_settings()  # 执行完成通知（按指令开关）
+        self._batch_seq = 0    # 批量执行通知的批次编号
+        self._tray = None      # 托盘图标（用于执行完成气泡通知）
+        self._tray_menu = None
         self._monitor_history = {}  # (id(服务器), 日志key) -> 历史报错列表（停止监控后仍可右键查看）
         self._poller = None    # 后台拉取线程（MonitorPoller），None 表示空闲
         self._monitor_timer = QTimer(self)
@@ -1340,6 +1547,7 @@ class MainWindow(QWidget):
         self._timer.start()
 
         self._build_ui()
+        self._setup_tray()
         self._refresh_server_buttons()
         self._append('<span style="color:#666">就绪。请「添加服务器」并在左侧选中一个服务器，然后点击下方指令按钮。</span>')
 
@@ -1842,9 +2050,22 @@ class MainWindow(QWidget):
                 btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
                 btn.clicked.connect(lambda _=False, c=cmd: self._on_run(c))
                 if cmd["key"] == "swgroup":
+                    btn.setToolTip("右键：查看群组 / 执行完成通知")
                     btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
                     btn.customContextMenuRequested.connect(
-                        lambda pos, b=btn: self._show_group_view_menu(b)
+                        lambda pos, c=cmd, b=btn: self._show_group_view_menu(c, b)
+                    )
+                elif cmd["key"] == "proc":
+                    btn.setToolTip("右键：检查进程设置 / 执行完成通知")
+                    btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                    btn.customContextMenuRequested.connect(
+                        lambda pos, c=cmd, b=btn: self._show_proc_settings_menu(c, b, pos)
+                    )
+                else:
+                    btn.setToolTip("右键：执行完成通知")
+                    btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                    btn.customContextMenuRequested.connect(
+                        lambda pos, c=cmd, b=btn: self._show_notify_menu(c, b, pos)
                     )
                 self.cmd_buttons.append(btn)
 
@@ -1888,12 +2109,14 @@ class MainWindow(QWidget):
                     btn = QPushButton(cmd["label"])
                     btn.setMinimumHeight(40)
                     btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-                    if not cmd.get("no_config"):
-                        btn.setToolTip("右键：修改客户端路径配置")
-                        btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-                        btn.customContextMenuRequested.connect(
-                            lambda pos, b=btn: self._on_client_cmd_menu(b, pos)
-                        )
+                    if cmd.get("no_config"):
+                        btn.setToolTip("右键：执行完成通知")
+                    else:
+                        btn.setToolTip("右键：修改客户端路径配置 / 执行完成通知")
+                    btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                    btn.customContextMenuRequested.connect(
+                        lambda pos, c=cmd, b=btn: self._on_client_cmd_menu(c, b, pos)
+                    )
                     btn.clicked.connect(lambda _=False, c=cmd: self._on_run(c))
                     self.cmd_buttons.append(btn)
                     row_h.addWidget(btn, 1)
@@ -2196,11 +2419,12 @@ class MainWindow(QWidget):
         return self._target_indexes()
 
     # ---------- 群组查看 ----------
-    def _show_group_view_menu(self, btn):
-        """「切换群组」按钮右键菜单：提供「查看群组」入口。"""
+    def _show_group_view_menu(self, cmd, btn):
+        """「切换群组」按钮右键菜单：查看群组 + 执行完成通知。"""
         menu = QMenu(self)
         act = menu.addAction("查看群组")
         act.triggered.connect(lambda _=False: self._show_group_list_dialog())
+        self._add_notify_menu_action(menu, cmd)
         menu.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
 
     def _show_group_list_dialog(self):
@@ -2221,6 +2445,121 @@ class MainWindow(QWidget):
         layout.addLayout(row)
         dlg.exec()
 
+    # ---------- 检查进程设置 ----------
+    def _show_proc_settings_menu(self, cmd, btn, pos):
+        """「显示进程状态」按钮右键菜单：检查进程设置 + 执行完成通知。"""
+        menu = QMenu(self)
+        act = menu.addAction("检查进程设置")
+        act.triggered.connect(lambda _=False: self._open_proc_settings_dialog())
+        self._add_notify_menu_action(menu, cmd)
+        menu.exec(btn.mapToGlobal(pos))
+
+    def _open_proc_settings_dialog(self):
+        """检查进程设置弹窗：控制进程状态输出时是否附带进程数。"""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("检查进程设置")
+        dlg.setMinimumWidth(340)
+        layout = QVBoxLayout(dlg)
+        count_check = QCheckBox("打印进程数（例如：主干S3 进程数：25）")
+        count_check.setChecked(self._proc_settings.get("show_proc_count", True))
+        layout.addWidget(count_check)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("确定")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._proc_settings = {"show_proc_count": count_check.isChecked()}
+        save_proc_settings(self._proc_settings)
+
+    # ---------- 执行完成通知 ----------
+    @staticmethod
+    def _notify_key(cmd):
+        """通知配置使用的 key：自定义指令按 op 记录，避免增删后下标错位。"""
+        return cmd.get("notify_key") or cmd["key"]
+
+    def _notify_enabled(self, key):
+        return bool(self._notify_settings.get("commands", {}).get(key, True))
+
+    def _set_notify_enabled(self, key, checked, label=""):
+        self._notify_settings.setdefault("commands", {})[key] = bool(checked)
+        save_notify_settings(self._notify_settings)
+        self._append(
+            '[%s] 「%s」执行完成通知已%s'
+            % (now_str(), esc(label or key), "开启" if checked else "关闭")
+        )
+
+    def _add_notify_menu_action(self, menu, cmd):
+        """在右键菜单中追加「执行完成通知」勾选项。"""
+        key = self._notify_key(cmd)
+        if menu.actions():
+            menu.addSeparator()
+        act = menu.addAction("执行完成通知")
+        act.setCheckable(True)
+        act.setChecked(self._notify_enabled(key))
+        act.triggered.connect(
+            lambda checked, k=key, label=cmd["label"]: self._set_notify_enabled(k, checked, label)
+        )
+
+    def _show_notify_menu(self, cmd, btn, pos):
+        """指令按钮右键菜单：仅提供「执行完成通知」开关。"""
+        menu = QMenu(self)
+        self._add_notify_menu_action(menu, cmd)
+        menu.exec(btn.mapToGlobal(pos))
+
+    def _setup_tray(self):
+        """创建托盘图标，用于执行完成后的气泡通知。"""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        icon = self.windowIcon()
+        if icon.isNull():
+            return
+        self._tray = QSystemTrayIcon(icon, self)
+        self._tray.setToolTip("测试工具")
+        menu = QMenu(self)
+        open_act = menu.addAction("打开工具")
+        open_act.triggered.connect(lambda _=False: self._on_tray_activated(
+            QSystemTrayIcon.ActivationReason.Trigger))
+        quit_act = menu.addAction("关闭工具")
+        quit_act.triggered.connect(QApplication.quit)
+        self._tray_menu = menu
+        self._tray.setContextMenu(menu)
+        self._tray.activated.connect(self._on_tray_activated)
+        self._tray.show()
+
+    def _on_tray_activated(self, reason):
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                      QSystemTrayIcon.ActivationReason.DoubleClick):
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+
+    def _send_notification(self, title, message, ok=True):
+        """发送执行完成通知：提示音 + 托盘气泡（无托盘时闪烁任务栏）。"""
+        short = message if len(message) <= 200 else message[:197] + "..."
+        QApplication.beep()
+        if self._tray is not None:
+            icon = (QSystemTrayIcon.MessageIcon.Information if ok
+                    else QSystemTrayIcon.MessageIcon.Warning)
+            self._tray.showMessage(title, short, icon, 6000)
+        else:
+            window = self.windowHandle()
+            if window is not None:
+                try:
+                    QApplication.alert(window, 0)
+                except Exception:
+                    pass
+
+    def _notify_single(self, key, title, ok, detail):
+        """单条指令（本地指令 / SVN 等）执行完毕通知。"""
+        if not self._notify_enabled(key):
+            return
+        self._send_notification(title, detail, ok=ok)
+
     # ---------- 更多指令弹窗 ----------
     def _custom_commands(self):
         """把自定义指令定义转换成与 COMMANDS 同结构的指令项。"""
@@ -2233,10 +2572,13 @@ class MainWindow(QWidget):
                 "check_proc": d["check_proc"],
                 "more": True,
                 "custom": True,
+                "notify_key": "custom:" + str(d["op"]),
             }
             if d.get("need_param"):
                 cmd["param"] = "arg"
                 cmd["param_name"] = "参数"
+            if d.get("need_text"):
+                cmd["text"] = True
             cmds.append(cmd)
         return cmds
 
@@ -2251,14 +2593,16 @@ class MainWindow(QWidget):
             add_callback=self._add_custom_and_get_list,
             edit_callback=self._edit_custom_command,
             delete_callback=self._delete_custom_command,
+            notify_menu_cb=self._add_notify_menu_action,
             parent=self,
         )
         accepted = dlg.exec() == QDialog.DialogCode.Accepted
         chosen = dlg.chosen
         value = dlg.param_value
+        text = dlg.text_value
         dlg.deleteLater()
         if accepted and chosen is not None:
-            self._on_run(chosen, param_override=value)
+            self._on_run(chosen, param_override=value, text_override=text)
 
     def _add_custom_and_get_list(self):
         """在「更多」弹窗里新增指令后，返回更新后的指令列表供弹窗刷新。"""
@@ -2280,14 +2624,14 @@ class MainWindow(QWidget):
         dlg = AddCommandDialog(initial=self._custom_cmd_defs[idx], parent=self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return self._all_more_commands()
-        name, op, need_param, check_proc = dlg.values()
+        name, op, need_param, need_text, check_proc = dlg.values()
         if any(i != idx and d["op"].lower() == op.lower()
                for i, d in enumerate(self._custom_cmd_defs)):
             QMessageBox.information(self, "提示", "该指令已存在：%s" % op)
             return self._all_more_commands()
         self._custom_cmd_defs[idx] = {
             "name": name, "op": op,
-            "need_param": need_param, "check_proc": check_proc,
+            "need_param": need_param, "need_text": need_text, "check_proc": check_proc,
         }
         save_custom_cmd_defs(self._custom_cmd_defs)
         self._append('[%s] 已编辑指令：<b>%s</b>' % (now_str(), esc(name)))
@@ -2312,7 +2656,7 @@ class MainWindow(QWidget):
         dlg = AddCommandDialog(parent=self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        name, op, need_param, check_proc = dlg.values()
+        name, op, need_param, need_text, check_proc = dlg.values()
         if any(d["op"].lower() == op.lower() for d in self._custom_cmd_defs):
             QMessageBox.information(self, "提示", "该指令已存在：%s" % op)
             return
@@ -2320,13 +2664,17 @@ class MainWindow(QWidget):
             "name": name,
             "op": op,
             "need_param": need_param,
+            "need_text": need_text,
             "check_proc": check_proc,
         })
         save_custom_cmd_defs(self._custom_cmd_defs)
+        features = ["带数字框" if need_param else None,
+                    "带文本框" if need_text else None]
+        features = [f for f in features if f] or ["无参数"]
         self._append(
             '[%s] 已新增指令：<b>%s</b>（%s，%s，%s）'
             % (now_str(), esc(name),
-               "带数字框" if need_param else "无参数",
+               "、".join(features),
                "执行后检查进程" if check_proc else "不检查进程",
                "指令 %s" % op)
         )
@@ -2394,7 +2742,7 @@ class MainWindow(QWidget):
         viewer.deleteLater()
 
     # ---------- 执行指令 ----------
-    def _on_run(self, cmd, param_override=None):
+    def _on_run(self, cmd, param_override=None, text_override=None):
         if cmd.get("mode") == "local":
             self._run_local(cmd)
             return
@@ -2444,6 +2792,19 @@ class MainWindow(QWidget):
             branch, season = dlg.values()
             params.extend([branch, season])
             label = "%s（%s，赛季 %s）" % (label, branch, season)
+        elif cmd.get("dialog") == "trial":
+            dlg = TrialFlagDialog(self)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            flag = dlg.value()
+            params.append(flag)
+            label = "%s（%s）" % (label, "开启" if flag == "true" else "关闭")
+        if cmd.get("text"):
+            # 自定义指令的文本框内容：整段跟在服务器编号后面（以空格分隔）
+            text = (text_override or "").strip()
+            if text:
+                params.append(text)
+                label = "%s（%s）" % (label, text)
 
         steps = [{"label": label, "op": cmd["op"], "show_body": True, "params": params}]
         if cmd.get("check_proc"):
@@ -2455,6 +2816,7 @@ class MainWindow(QWidget):
             })
 
         started = 0
+        batch = None  # 本次点击的批量执行（多服务器汇总成一条通知）
         for idx in targets:
             srv = self.servers[idx]
             if not MACHINE_PREFIX.get(srv["machine"]):
@@ -2470,6 +2832,23 @@ class MainWindow(QWidget):
                 )
                 continue
 
+            if batch is None:
+                self._batch_seq += 1
+                batch = {
+                    "id": self._batch_seq,
+                    "cmd_key": cmd["key"],
+                    "notify_key": self._notify_key(cmd),
+                    "label": steps[0]["label"],
+                    "multi": bool(getattr(self, "_server_entry", None)
+                                  and self._server_entry["multi"]),
+                    "total": 0,
+                    "done": 0,
+                    "ok": 0,
+                    "fail": 0,
+                    "fail_names": [],
+                    "names": [],
+                }
+
             flow = {
                 "srv": srv,
                 "cmd_key": cmd["key"],
@@ -2479,11 +2858,15 @@ class MainWindow(QWidget):
                 "worker": None,
                 "live_no": None,
                 "start_ts": 0.0,
+                "batch": batch,
+                "failed": False,
             }
             self._flows.append(flow)
             self._run_next_step(flow)
             started += 1
 
+        if batch is not None:
+            batch["total"] = started
         if started == 0:
             QMessageBox.information(self, "提示", "选中的服务器都在执行该指令，请等待完成")
 
@@ -2512,6 +2895,45 @@ class MainWindow(QWidget):
         flow["step"] = None
         if flow in self._flows:
             self._flows.remove(flow)
+        self._finish_batch(flow)
+
+    def _finish_batch(self, flow):
+        """统计批量执行进度，全部结束后发一条汇总通知。"""
+        batch = flow.get("batch")
+        if not batch:
+            return
+        flow["batch"] = None
+        batch["done"] += 1
+        batch["names"].append(flow["srv"]["name"])
+        if flow.get("failed"):
+            batch["fail"] += 1
+            batch["fail_names"].append(flow["srv"]["name"])
+        else:
+            batch["ok"] += 1
+        if batch["done"] < batch["total"]:
+            return
+        if not self._notify_enabled(batch.get("notify_key") or batch["cmd_key"]):
+            return
+        total, ok, fail = batch["total"], batch["ok"], batch["fail"]
+        title = batch["label"]
+        if not batch.get("multi"):
+            # 单选模式：直接以服务器名称提示
+            name = batch["names"][0] if batch["names"] else "服务器"
+            if fail:
+                self._send_notification("%s 执行失败" % title,
+                                        "【%s】执行失败" % name, ok=False)
+            else:
+                self._send_notification("%s 执行成功" % title,
+                                        "【%s】执行成功" % name, ok=True)
+            return
+        if fail:
+            names = "、".join(batch["fail_names"][:5])
+            if len(batch["fail_names"]) > 5:
+                names += " 等 %d 台" % len(batch["fail_names"])
+            message = "%d/%d 成功，%d 台失败：%s" % (ok, total, fail, names)
+            self._send_notification("%s 执行完成" % title, message, ok=False)
+        else:
+            self._send_notification("%s 执行成功" % title, "%d 台服务器全部成功" % total, ok=True)
 
     def _cancel_flow(self, flow):
         """取消等待：停止接收结果，后台线程结束后自动回收。"""
@@ -2652,12 +3074,15 @@ class MainWindow(QWidget):
         buttons.rejected.connect(dlg.reject)
         dlg.exec()
 
-    def _on_client_cmd_menu(self, btn, pos):
-        """右键客户端指令按钮：打开客户端设置对话框。"""
+    def _on_client_cmd_menu(self, cmd, btn, pos):
+        """右键客户端指令按钮：客户端设置 + 执行完成通知。"""
         menu = QMenu(self)
-        config_action = menu.addAction("修改客户端路径配置")
+        config_action = None
+        if not cmd.get("no_config"):
+            config_action = menu.addAction("修改客户端路径配置")
+        self._add_notify_menu_action(menu, cmd)
         action = menu.exec(btn.mapToGlobal(pos))
-        if action == config_action:
+        if config_action is not None and action == config_action:
             self._open_client_settings_dialog()
 
     def _run_local(self, cmd):
@@ -2678,10 +3103,12 @@ class MainWindow(QWidget):
             try:
                 webbrowser.open(url)
                 self._append('[%s] <span style="color:#1e7e34">已在浏览器中打开客户端编译页面</span>' % now_str())
+                self._notify_single(key, "客户端编译", True, "已在浏览器中打开客户端编译页面")
             except Exception as exc:
                 QMessageBox.warning(self, "错误", '打开浏览器失败：\n%s' % str(exc))
                 self._append('[%s] <span style="color:#c62828">打开失败：%s</span>'
                              % (now_str(), esc(str(exc))))
+                self._notify_single(key, "客户端编译", False, "打开浏览器失败：%s" % str(exc))
 
         elif key == "openclient":
             settings, ok = self._ensure_client_settings(("need_main",))
@@ -2694,7 +3121,7 @@ class MainWindow(QWidget):
                     '主干客户端路径不存在：\n%s\n请在"客户端设置"中重新配置。' % exe_path,
                 )
                 return
-            self._launch_exe(exe_path, "主干客户端")
+            self._launch_exe(exe_path, "主干客户端", notify_key=key)
 
         elif key == "svnupdate":
             settings, ok = self._ensure_client_settings(("need_main",))
@@ -2725,7 +3152,7 @@ class MainWindow(QWidget):
                 )
                 return
             which = "本周分支" if weeks_ago == 0 else "上周分支"
-            self._launch_exe(exe_path, "%s（%s）" % (which, wed))
+            self._launch_exe(exe_path, "%s（%s）" % (which, wed), notify_key=key)
 
         elif key in ("svnupdatebranch", "svnupdatebranch_last"):
             settings, ok = self._ensure_client_settings(("need_branch",))
@@ -2748,12 +3175,15 @@ class MainWindow(QWidget):
     def _start_svn_worker(self, key, desc, svn_dir):
         """启动一个 SVN 后台 worker，登记到 _running_svn。"""
         self._running_svn.add(key)
+        self._svn_t0[key] = time.time()
+        self._svn_labels[key] = desc
         self._append('[%s] 正在%s（svn update %s）…' % (now_str(), esc(desc), esc(svn_dir)))
         worker = _SVNWorker(svn_dir, self)
         worker.done.connect(lambda *args, k=key: self._svn_done(k, *args))
+        self._svn_workers[key] = worker
         worker.start()
 
-    def _launch_exe(self, exe_path, label):
+    def _launch_exe(self, exe_path, label, notify_key=None):
         """启动一个 exe（Windows 下通过 cmd /c start 创建独立控制台窗口，标题设为 exe 完整路径）。"""
         try:
             if sys.platform == "win32":
@@ -2762,46 +3192,42 @@ class MainWindow(QWidget):
                 subprocess.Popen([exe_path])
             self._append('[%s] <span style="color:#1e7e34">已启动%s</span>'
                          % (now_str(), esc(label)))
+            if notify_key:
+                self._notify_single(notify_key, label, True, "已启动%s" % label)
         except Exception as exc:
             QMessageBox.warning(self, "错误", '启动%s失败：\n%s' % (label, str(exc)))
             self._append('[%s] <span style="color:#c62828">启动失败：%s</span>'
                          % (now_str(), esc(str(exc))))
+            if notify_key:
+                self._notify_single(notify_key, label, False, "启动失败：%s" % str(exc))
 
     def _svn_done(self, key, ok, returncode, stdout, stderr, errmsg):
         """SVN worker 完成回调；先清理 _running_svn，再输出结果。"""
         self._running_svn.discard(key)
+        self._svn_workers.pop(key, None)
+        t0 = self._svn_t0.pop(key, None)
+        desc = self._svn_labels.pop(key, None) or "SVN 更新"
+        elapsed = time.time() - t0 if t0 else 0.0
         if not ok:
             self._append('[%s] <span style="color:#c62828">SVN 更新失败：%s</span>'
                          % (now_str(), esc(errmsg)))
+            self._notify_single(key, desc, False, "失败：%s" % str(errmsg)[:150])
             QMessageBox.warning(self, "错误", 'SVN 更新失败：\n%s' % errmsg)
             return
         if returncode == 0:
-            # svn update 退出码为 0 时仍可能存在冲突（状态前缀为 C 的行），需单独检测并提醒
-            conflict_lines = []
-            tree_conflict_lines = []
-            for line in stdout.splitlines():
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                # 文本冲突：C 开头后跟若干空格 + 路径
-                if re.match(r"^C\s{2,}\S+", stripped):
-                    conflict_lines.append(stripped)
-                # 树冲突：行首为状态码，且树冲突列（第 7 个字符位置）为 C；
-                # 这里按列位置判断，避免把其他列的 C 误判为树冲突
-                elif stripped[0] in "ADGURM" and len(stripped) > 6 and stripped[6] == "C":
-                    tree_conflict_lines.append(stripped)
-                elif stripped.startswith("Tree conflict"):
-                    tree_conflict_lines.append(stripped)
-            if conflict_lines or tree_conflict_lines:
-                all_conflicts = conflict_lines + tree_conflict_lines
+            # svn update 退出码为 0 时仍可能存在冲突（状态列为 C 的行），需单独检测并提醒
+            counts, all_conflicts = _parse_svn_update(stdout)
+            summary = _format_svn_summary(counts, stdout, elapsed)
+            if all_conflicts:
                 count = len(all_conflicts)
                 detail = "\n".join(all_conflicts[:50])
                 if count > 50:
                     detail += "\n... 等共 %d 个" % count
                 self._append(
-                    '[%s] <span style="color:#e65100">⚠ SVN 更新完成，但发现 %d 个冲突，请尽快解决！</span>'
-                    % (now_str(), count)
+                    '[%s] <span style="color:#e65100">⚠ SVN 更新完成%s，但发现 %d 个冲突，请尽快解决！</span>'
+                    % (now_str(), esc(summary), count)
                 )
+                self._notify_single(key, desc, False, "完成%s，但发现 %d 个冲突" % (summary, count))
                 msg = QMessageBox(self)
                 msg.setIcon(QMessageBox.Icon.Warning)
                 msg.setWindowTitle("SVN 更新冲突")
@@ -2810,10 +3236,13 @@ class MainWindow(QWidget):
                 msg.setStandardButtons(QMessageBox.StandardButton.Ok)
                 msg.exec()
             else:
-                self._append('[%s] <span style="color:#1e7e34">SVN 更新完成</span>' % now_str())
+                self._append('[%s] <span style="color:#1e7e34">SVN 更新完成%s</span>'
+                             % (now_str(), esc(summary)))
+                self._notify_single(key, desc, True, summary)
         else:
             self._append('[%s] <span style="color:#c62828">SVN 更新失败（退出码 %d）</span>'
                          % (now_str(), returncode))
+            self._notify_single(key, desc, False, "失败（退出码 %d）" % returncode)
             QMessageBox.warning(
                 self, "SVN 更新失败",
                 '退出码 %d\n\nstdout:\n%s\n\nstderr:\n%s' % (
@@ -3182,6 +3611,7 @@ class MainWindow(QWidget):
             self._report_proc_status(body)
 
         if not ok:
+            flow["failed"] = True
             flow["steps"] = []  # 请求失败，终止后续步骤
 
         self._run_next_step(flow)
@@ -3212,14 +3642,27 @@ class MainWindow(QWidget):
         # 无异常时进一步识别版本信息
         season_match = SEASON_ARG_RE.search(body)
         season = "S%s" % season_match.group(1) if season_match else ""
+        count_match = PROC_COUNT_RE.search(body)
+        show_count = self._proc_settings.get("show_proc_count", True)
+        count_text = "进程数：%s" % count_match.group(1) if (count_match and show_count) else ""
 
         if BRANCH_KEYWORD in body:
             branch_match = BRANCH_RE.search(body)
             date = branch_match.group(1) if branch_match else ""
-            text = ("%s分支 %s" % (date, season)).strip() if season else "%s分支" % date
-            self._append('<span style="color:#12833b;font-weight:bold">%s</span>' % esc(text))
+            version = ("%s分支 %s" % (date, season)).strip() if season else "%s分支" % date
         elif season:
-            self._append('<span style="color:#12833b;font-weight:bold">主干%s</span>' % esc(season))
+            version = "主干%s" % season
+        else:
+            version = ""
+
+        if version:
+            html = '<span style="color:#12833b;font-weight:bold">%s</span>' % esc(version)
+            if count_text:
+                # 进程数单独输出，不加粗
+                html += ' <span style="color:#12833b">%s</span>' % esc(count_text)
+            self._append(html)
+        elif count_text:
+            self._append('<span style="color:#12833b">%s</span>' % esc(count_text))
         else:
             self._append('<span style="color:#12833b;font-weight:bold">✔ 进程无异常</span>')
 
@@ -3321,6 +3764,25 @@ class MainWindow(QWidget):
 
     # ---------- 关闭 ----------
     def closeEvent(self, event):
+        svn_running = [w for w in self._svn_workers.values() if w.isRunning()]
+        if svn_running:
+            answer = QMessageBox.question(
+                self, "确认退出",
+                "有 %d 个 SVN 更新正在进行，退出会中断更新（可能残留工作副本锁定），"
+                "确定要退出吗？" % len(svn_running)
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+            for worker in svn_running:
+                try:
+                    worker.done.disconnect()
+                except Exception:
+                    pass
+                worker.terminate()
+                worker.wait(2000)
+            self._svn_workers.clear()
+
         running = [f for f in self._flows if f.get("worker") is not None and f["worker"].isRunning()]
         if running:
             answer = QMessageBox.question(

@@ -122,8 +122,9 @@ def save_search_settings(data: dict) -> None:
     p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def load_ignore_dirs() -> list:
-    dirs = load_search_settings().get("ignore_dirs", DEFAULT_IGNORE_DIRS)
+def load_ignore_dirs(data=None) -> list:
+    dirs = (data if data is not None else load_search_settings()).get(
+        "ignore_dirs", DEFAULT_IGNORE_DIRS)
     if not isinstance(dirs, list):
         return list(DEFAULT_IGNORE_DIRS)
     result = []
@@ -440,6 +441,41 @@ class SearchWorker(QThread):
         })
 
 
+def _decode_svn_output(data):
+    """svn.exe 在中文 Windows 上按 GBK 输出，先试 utf-8，再退回 gbk。"""
+    if not data:
+        return ""
+    for enc in ("utf-8", "gbk"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", "replace")
+
+
+def _parse_svn_status(stdout):
+    """解析 svn update 状态行，返回 (状态码计数, 冲突行)。
+
+    状态行为「4 列状态码 + 空格 + 路径」，C 在第 1/2 列为文本/属性冲突，
+    第 4 列为树冲突；不能先 strip 再判断，否则列位置会丢。
+    """
+    counts = {}
+    conflicts = []
+    for line in (stdout or "").splitlines():
+        if len(line) <= 5 or line[4] != " ":
+            continue
+        status = line[:4]
+        if status.strip(" ADUGCERB"):
+            continue
+        if "C" in status:
+            conflicts.append(line.strip())
+            continue
+        code = status.strip()[:1]
+        if code:
+            counts[code] = counts.get(code, 0) + 1
+    return counts, conflicts
+
+
 class SvnUpdateWorker(QThread):
     """后台对配置目录执行 svn update。"""
 
@@ -451,15 +487,24 @@ class SvnUpdateWorker(QThread):
 
     def run(self):
         try:
+            # 冲突不交互提问：否则 svn 会把 stdin 当终端，停在 Select: (p) postpone…
+            # 一直等输入，导致更新其实已完成却一直卡到 10 分钟超时
             result = subprocess.run(
-                ["svn", "update"],
+                ["svn", "update", "--non-interactive", "--accept", "postpone"],
                 cwd=self._svn_dir,
-                capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=600,
+                capture_output=True, stdin=subprocess.DEVNULL,
+                timeout=600,
             )
-            self.done.emit(True, result.returncode, result.stdout, result.stderr, "")
+            self.done.emit(
+                True, result.returncode,
+                _decode_svn_output(result.stdout), _decode_svn_output(result.stderr),
+                "",
+            )
         except subprocess.TimeoutExpired:
-            self.done.emit(False, -1, "", "", "svn update 超时（10 分钟）")
+            self.done.emit(
+                False, -1, "", "",
+                "svn update 超时（10 分钟）；本次更新已被中断，工作副本若提示锁定请执行 svn cleanup",
+            )
         except FileNotFoundError:
             self.done.emit(False, -1, "", "", "未找到 svn 命令，请确认已安装并加入 PATH")
         except Exception as exc:
@@ -515,7 +560,8 @@ class ConfigSearchPage(QWidget):
         self._rows = []
         self._keyword = ""
         self._lang = {}
-        self._ignore_dirs = load_ignore_dirs()
+        self._search_settings = load_search_settings()
+        self._ignore_dirs = load_ignore_dirs(self._search_settings)
         self.setStyleSheet(PAGE_QSS)
         self._build_ui()
         self._refresh_dir()
@@ -555,17 +601,17 @@ class ConfigSearchPage(QWidget):
         bar.addWidget(self.stop_btn)
 
         self.locale_check = QCheckBox("忽略本地化副本")
-        self.locale_check.setChecked(True)
         self.locale_check.setToolTip("忽略以 JP/KR/TW/TH/VI/Hybrid 结尾的副本")
-        bar.addWidget(self.locale_check)
         self.lang_check = QCheckBox("忽略多语言表")
-        self.lang_check.setChecked(True)
         self.lang_check.setToolTip("跳过 Language 目录下的多语言文本表")
-        bar.addWidget(self.lang_check)
         self.ml_check = QCheckBox("多语言名称匹配")
-        self.ml_check.setChecked(True)
         self.ml_check.setToolTip("Name/Des 等字段存的是多语言 id，按 Language/CN 解析后参与匹配")
-        bar.addWidget(self.ml_check)
+        for chk, key in ((self.locale_check, "ignore_locale"),
+                         (self.lang_check, "ignore_language"),
+                         (self.ml_check, "ml_match")):
+            chk.setChecked(self._saved_option(key))
+            chk.toggled.connect(self._save_options)
+            bar.addWidget(chk)
         top_box.addLayout(bar)
 
         scope_row = QHBoxLayout()
@@ -731,18 +777,7 @@ class ConfigSearchPage(QWidget):
 
     @staticmethod
     def _svn_update_stats(stdout):
-        counts = {}
-        conflicts = []
-        for line in (stdout or "").splitlines():
-            s = line.strip()
-            if not s:
-                continue
-            if s.startswith("Tree conflict") or re.match(r"^C\s{2,}\S", s):
-                conflicts.append(s)
-                continue
-            if len(s) > 1 and s[0] in "ADUGCER" and s[1] in " \t":
-                counts[s[0]] = counts.get(s[0], 0) + 1
-        return counts, conflicts
+        return _parse_svn_status(stdout)
 
     def _populate_scope(self):
         root = Path(self._config_dir())
@@ -822,6 +857,21 @@ class ConfigSearchPage(QWidget):
         self._populate_scope()
         self.status.setText("已保存忽略文件夹：%s（重新搜索生效）" % (
             "、".join(dirs) if dirs else "无"))
+
+    # ---------- 勾选状态记忆 ----------
+    def _saved_option(self, key) -> bool:
+        value = self._search_settings.get(key)
+        return value if isinstance(value, bool) else True
+
+    def _save_options(self):
+        try:
+            data = load_search_settings()
+            data["ignore_locale"] = self.locale_check.isChecked()
+            data["ignore_language"] = self.lang_check.isChecked()
+            data["ml_match"] = self.ml_check.isChecked()
+            save_search_settings(data)
+        except Exception:
+            pass
 
     def _choose_dir(self):
         start = self._config_dir() or str(Path.home())

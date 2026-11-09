@@ -25,7 +25,7 @@
       "cmd": "code GIFT_MGR.getModuleByGiftType(1012).wizTest(\"玩家id\",要加的经验值)"
     },
     {
-      "name": "星石宝箱",
+      "name": "高级星石宝箱",
       "cmd": "add_item 18001,40"
     },
     {
